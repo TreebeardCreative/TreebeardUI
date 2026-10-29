@@ -1,4 +1,4 @@
--- TreebeardUI v0.3.1: reusable library, no SavedVariables or slash commands.
+-- TreebeardUI v0.1.0: reusable library, no SavedVariables or slash commands.
 local addonName, private = ...
 local registryNames = { "TBUIRegistry", "TreebeardUIRegistry", "TumbleManeUIRegistry" }
 local registry
@@ -20,7 +20,7 @@ if type(registry) ~= "table" or registry.PROTOCOL ~= 1 then
     registry = { PROTOCOL = 1, runtimes = {} }
 end
 for _, name in ipairs(registryNames) do _G[name] = registry end
-local VERSION, API = "0.3.1", 1
+local VERSION, API = "0.1.0", 1
 local runtimeKey = tostring(API) .. ":" .. VERSION
 local previous = registry.runtimes[runtimeKey]
 local standalone = addonName == "TreebeardUI" or addonName == "TumbleManeUI"
