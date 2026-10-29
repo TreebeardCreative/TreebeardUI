@@ -44,10 +44,9 @@ L.Metrics = {
     SECTION_BODY_GAP = 14,
     SECTION_BOTTOM_PADDING = 14,
     ROW_GAP = DEFAULT_GAP,
-    -- Reserve one COMPACT shared control slot in every Row, even an empty
-    -- Row. The intrinsic height of the standard labelled slider defines the
-    -- minimum; buttons are centered inside that slot. Padding is included
-    -- ONCE in Row measurement, not added again at each nesting level.
+    -- Reserve a standard shared control slot in every Row, even an empty Row.
+    -- Its minimum fits the standard labelled slider; compact text/button rows
+    -- may opt into a smaller minimum. Padding is counted once during measurement.
     ROW_MIN_HEIGHT = 40,
     ROW_VERTICAL_PADDING = 1,
     -- Host-region inset is separate from the internal Row breathing room.
@@ -401,6 +400,12 @@ function L:Row(parent, id, opts)
     local row = Node(parent, "row", id, opts)
     -- Rows control vertical alignment inside their parent allocation.
     row.layoutAlign = NormalizeVerticalAlign(opts.align)
+    -- Control rows keep the established shared height unless a consumer opts
+    -- into a smaller slot for text-only or button-only content.
+    local minHeight = tonumber(opts.minHeight)
+    if minHeight then
+        row.layoutMinHeight = math.max(1, minHeight)
+    end
     return row
 end
 
@@ -818,7 +823,7 @@ function L:MeasureRow(row, bottomPadding)
     -- Vertical breathing room is a Row rule, not a Content-type rule.
     -- Empty Rows also retain the standard slot, so peers do not collapse.
     local natural = tallest + (2 * L.Metrics.ROW_VERTICAL_PADDING) + (bottomPadding or 0)
-    row:SetHeight(math.max(L.Metrics.ROW_MIN_HEIGHT, natural))
+    row:SetHeight(math.max(row.layoutMinHeight or L.Metrics.ROW_MIN_HEIGHT, natural))
     return row:GetHeight()
 end
 
