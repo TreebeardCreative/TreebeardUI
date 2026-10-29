@@ -1,0 +1,16 @@
+## Interface: 120105, 120100, 120005, 120001, 120000
+## Title: TreebeardUI
+## Notes: Shared window, controls and adaptive layout framework.
+## Author: TreebeardCreative
+## Version: 0.3.1
+## IconTexture: Interface\AddOns\TreebeardUI\Textures\addon_icon.tga
+
+Bootstrap.lua
+Compatibility/Retail.lua
+TextureManifest.lua
+Framework/WindowStyles.lua
+Framework/SettingsLayout.lua
+Framework/SettingsControls.lua
+Framework/SettingsPageMeasure.lua
+Framework/SettingsPageHost.lua
+Framework/WindowFrame.lua
