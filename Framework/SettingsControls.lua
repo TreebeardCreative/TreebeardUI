@@ -1392,7 +1392,7 @@ local function AddSteppedSlider(parent, label, values, x, y, getter, setter, for
     slider:SetHitRectInsets(-2, -2, -2, -2)
     if thumb then
         thumb:SetSize(metrics.SLIDER_THUMB_SIZE, metrics.SLIDER_THUMB_SIZE)
-        -- Match the graphite scrollbar: silver normally, gold when hovered
+        -- Match the active preset scrollbar colors in normal and hover states.
         -- or actively adjusting. Never change the consumer's slider value.
         local hovering = false
         local dragging = false
@@ -1819,7 +1819,7 @@ local function AddModuleSelectionDropdown(parent, label, x, y, options, selected
 end
 
 local function AddActionButton(parent, label, x, y, width, callback)
-    -- Reuse the same graphite buttons as navigation, output and chrome.
+    -- Reuse the same preset-aware buttons as navigation, output and chrome.
     -- Unlike UIPanelButtonTemplate this has no Blizzard border or text theme.
     local button = TBU.WindowStyles:CreateButton(parent, label, width or 170, callback or function() end)
     button:SetPoint("TOPLEFT", x, y)

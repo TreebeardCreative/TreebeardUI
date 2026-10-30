@@ -3,13 +3,13 @@ Treebeard UI is a shared settings framework built for TreebeardCreative’s Worl
 
 ## Version and compatibility
 
-Current working test build: `0.1.6`. Warm Warcraft is the framework default palette; built-in presets ship with TreebeardUI, while consumers choose which presets to offer and may add their own. Graphite remains available for comparison. This default change is awaiting a fresh SavedVariables in-client review. The addon icon has transparent outer corners.
+Current candidate build: `0.1.8` / API `1`; it raises the default settings window width/minimum from 801 to 821 UI units so sections retain room beside the scrollbar gutter. The 30-unit scrollbar/content gutter remains unchanged. It includes the pending `0.1.7` Graphite removal and Warm Warcraft default/fallback. TreebeardUI ships Warm Warcraft, Brushfire, and Midnight Flux; consumers choose which built-in presets to offer and may add their own. The `0.1.8` candidate awaits in-client confirmation. The previously accepted test build is `0.1.6` / API `1`. The addon icon has transparent outer corners.
 
 Previously accepted build: TreebeardUI `0.1.1`, with `API_VERSION` still set to `1`. The build version identifies framework updates. The API version is reserved for a deliberate incompatible change to the consumer-facing contract; once API 1 is publicly released, keep it stable unless a breaking change is intended and clearly announced. During pre-release development, potentially breaking changes may remain within API 1 while the contract is still being shaped and tested.
 
 ## Theme ownership
 
-TreebeardUI ships its built-in theme presets and provides a default fallback. Each consumer owns its theme picker and saved selection: it may expose any subset of the shipped presets and add consumer-specific presets. Consumers should not remove entries from the shared `WindowStyles.Presets` registry, because other addons may use them at the same time.
+TreebeardUI ships Warm Warcraft, Brushfire, and Midnight Flux, with Warm Warcraft as the default fallback. Each consumer owns its theme picker and saved selection: it may expose any subset of the shipped presets and add consumer-specific presets. Consumers should not remove entries from the shared `WindowStyles.Presets` registry, because other addons may use them at the same time.
 
 `SettingsLayout:Row(parent, id, options)` keeps its standard minimum height by default. Consumers may pass `minHeight` for compact text-only or button-only rows; it never lowers the row below its measured content height. Existing callers that omit this option retain the existing layout.
 

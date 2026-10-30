@@ -5,8 +5,7 @@ local TBU = (private.__TBUIRuntime or private.__TreebeardUIRuntime) or private
 
 -- Warm Warcraft is the complete default palette and fallback. TreebeardUI
 -- ships its built-in presets; consumers choose which ones to offer, and may
--- add their own presets. Consumers choose which shipped presets to expose in
--- their own UI; do not remove presets from the shared library registry.
+-- add their own presets.
 local Styles = {}
 TBU.WindowStyles = Styles
 
@@ -15,66 +14,11 @@ Styles.DefaultPreset = "warm_warcraft"
 Styles.ActivePreset = "warm_warcraft"
 Styles.ConsumerPresets = {}
 Styles.RenderOwner = nil
-Styles.Presets = {
-    graphite = {
-        -- Graphite: intentionally neutral charcoal, with a clearer hierarchy
-        -- between the shell, section headings, fields and active controls.
-        background = { 0.05098, 0.05490, 0.06275, 0.98 }, -- #0D0E10
-        border = { 0.27843, 0.29412, 0.32549, 1.00 }, -- #474B53
-        borderHover = { 0.60000, 0.63529, 0.69020, 1.00 }, -- #99A2B0
-        borderDrag = { 0.78431, 0.81176, 0.85098, 1.00 }, -- #C8CFD9
-        title = { 0.17255, 0.18824, 0.21176, 1.00 }, -- #2C3036
-        titleHover = { 0.23529, 0.25490, 0.29020, 1.00 }, -- #3C414A
-        panel = { 0.07843, 0.08627, 0.10196, 0.96 }, -- #14161A
-        button = { 0.14118, 0.15686, 0.18039, 1.00 }, -- #24282E
-        buttonHover = { 0.20784, 0.22745, 0.25882, 1.00 }, -- #353A42
-        text = { 0.93333, 0.94118, 0.95294, 1.00 }, -- #EEF0F3
-        muted = { 0.68627, 0.71373, 0.75294, 1.00 }, -- #AFB6C0
-        edgeSize = 1,
-        titleHeight = 29,
-        paneHeaderHeight = 62,
-        paneFooterHeight = 36,
-        paneGutter = 18,
-        paneBorderInset = 0,
-        sectionCanvasLeft = 12,
-        sectionCanvasRight = 12,
-        sectionCanvasTop = 15,
-        sectionCanvasBottom = 15,
-        pageTitleTop = 8,
-        pageDescriptionTop = 32,
-        -- Graphite owns defaults for every visible color role. Other presets
-        -- inherit these unless they deliberately choose a different color.
-        resizeGripIdle = { 0.69020, 0.71373, 0.75294, 1.00 }, -- #B0B6C0
-        interactionGold = { 0.81176, 0.83529, 0.87451, 1.00 }, -- #CFD5DF, neutral accent
-        sectionHeaderFill = { 0.17255, 0.18824, 0.21176, 1.00 }, -- #2C3036; same as title, independent role
-        sectionHeaderText = { 0.93333, 0.94118, 0.95294, 1.00 }, -- #EEF0F3; same as text, independent role
-        dropdownFieldBorder = { 0.60000, 0.63529, 0.69020, 1.00 }, -- #99A2B0; same as borderHover, independent role
-        dropdownActiveBorder = { 0.81176, 0.83529, 0.87451, 1.00 }, -- #CFD5DF; same as interactionGold, independent role
-        dropdownPopupBorder = { 0.81176, 0.83529, 0.87451, 1.00 }, -- #CFD5DF; same as interactionGold, independent role
-        dropdownDivider = { 0.35, 0.35, 0.35, 0.90 },
-        canvasBackground = { 0.055, 0.055, 0.065, 1.0 }, -- #0E0E11
-        sectionBackground = { 0, 0, 0, 0.18 },
-        inputShadow = { 0, 0, 0, 0.55 },
-        scrollTrack = { 0.15, 0.15, 0.15, 0.90 },
-        sliderTrack = { 0.15, 0.15, 0.15, 0.90 }, -- same current value as scrollTrack; independent role
-        orderedRowBackground = { 0.07, 0.07, 0.07, 0.45 },
-        orderedRowBorder = { 0.30, 0.30, 0.30, 0.8 },
-        orderedRowHover = { 0.65, 0.75, 0.95, 0.14 },
-        resizeHighlight = { 0.50, 0.51, 0.55, 0.20 },
-        navigationWidth = 155,
-        navigationGap = 12,
-        contentSectionWidth = 540,
-        sectionColumnGap = 12,
-        settingsSize = { 801, 620, 801, 620 },
-        debugSize = { 710, 395, 530, 290 },
-        edgeInside = 6,
-        edgeOutside = 5,
-    },
-}
+Styles.Presets = {}
 
--- Keep semantic roles as independent palette entries even when two Graphite
--- roles currently share a color. Other presets may distinguish those roles.
--- Other styles clone Graphite first, then override only intentionally distinct
+-- Keep semantic roles as independent palette entries even when two roles
+-- currently share a color. Other presets may distinguish those roles.
+-- Other styles clone Warm Warcraft, then override intentionally distinct
 -- values. Geometry stays shared between presets.
 local function ClonePreset(base)
     local out = {}
@@ -89,11 +33,9 @@ local function ClonePreset(base)
     end
     return out
 end
-local graphite = Styles.Presets.graphite
 
--- Warm Warcraft is an experiment based on Forever's dark, bronze-and-gold UI.
--- Keep every color role explicit here so this palette can later become the
--- default without silently inheriting missing values from Graphite.
+-- Warm Warcraft is based on Forever's dark, bronze-and-gold UI. Every color
+-- role is explicit here so it remains the complete source palette.
 Styles.Presets.warm_warcraft = {
     -- Main surfaces
     background = {0.10980, 0.09804, 0.09020, 0.98}, -- #1C1917; lifted, less yellow
@@ -157,14 +99,14 @@ Styles.Presets.warm_warcraft = {
     navigationGap = 12,
     contentSectionWidth = 540,
     sectionColumnGap = 12,
-    settingsSize = {801, 620, 801, 620},
+    settingsSize = {821, 620, 821, 620},
     debugSize = {710, 395, 530, 290},
     edgeInside = 6,
     edgeOutside = 5,
 }
 
 -- Midnight Flux: navy/purple surfaces and restrained sunset-orange accents.
-Styles.Presets.midnight_flux = ClonePreset(Styles.Presets.graphite)
+Styles.Presets.midnight_flux = ClonePreset(Styles.Presets.warm_warcraft)
 local flux = Styles.Presets.midnight_flux
 flux.background = {0.0510, 0.0706, 0.1569, 0.98} -- #0D1228
 flux.title = {0.1255, 0.1255, 0.2784, 1} -- #202047
@@ -182,11 +124,11 @@ flux.borderDrag = flux.interactionGold -- shared active accent (#E5A166)
 flux.dropdownFieldBorder = flux.borderHover -- lighter purple resting dropdown border (#986284)
 flux.dropdownActiveBorder = flux.interactionGold -- same soft amber active accent
 flux.dropdownPopupBorder = flux.interactionGold -- same soft amber active accent
-flux.sectionHeaderFill = flux.border -- restore pre-Graphite-refresh purple header (#48335F)
+flux.sectionHeaderFill = flux.border -- purple header surface (#48335F)
 flux.sectionHeaderText = flux.interactionGold -- restored soft amber heading text
 flux.resizeGripIdle = {0.6549, 0.6588, 0.7529, 1} -- #A7A8C0
 -- Brushfire: TreebeardCreative-inspired near-black surfaces with true-red accents.
-Styles.Presets.brushfire = ClonePreset(Styles.Presets.graphite)
+Styles.Presets.brushfire = ClonePreset(Styles.Presets.warm_warcraft)
 local brushfire = Styles.Presets.brushfire
 brushfire.background = {0.0431, 0.0510, 0.0627, 0.98} -- #0B0D10
 brushfire.title = {0.3412, 0.0314, 0.0314, 1.00} -- #570808

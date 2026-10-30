@@ -219,7 +219,7 @@ end
 function PageHost:CreateEmbedded(parent, pageId)
     -- The scroll viewport itself is flush with its shared header/footer.
     -- Section placement padding is measured separately in BindSections.
-    local scroll, content, scrollbar = CreateScroll(parent, 0, 0, true, "graphite", 0)
+    local scroll, content, scrollbar = CreateScroll(parent, 0, 0, true, nil, 0)
     local layout = TBU.SettingsLayout:Page(content, pageId, {padding=0})
     return {panel=parent, scroll=scroll, content=content,
         scrollbar=scrollbar, layout=layout, pageId=pageId, rows={}, sections={}}
@@ -228,7 +228,7 @@ end
 -- Placeholder pages use the same scroll infrastructure as the live
 -- embedded host, without allocating real controls for those pages yet.
 function PageHost:CreatePreviewViewport(parent)
-    local scroll, content, scrollbar = CreateScroll(parent, 0, 0, true, "graphite", 0)
+    local scroll, content, scrollbar = CreateScroll(parent, 0, 0, true, nil, 0)
     local function Update()
         local width = tonumber(scroll:GetWidth()) or 0
         if width <= 1 then return end
