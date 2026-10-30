@@ -238,13 +238,23 @@ function L:Section(parent, id, opts)
             edgeFile = "Interface\\Buttons\\WHITE8X8",
             edgeSize = 1,
         })
-        section:SetBackdropColor(0, 0, 0, opts.backgroundAlpha or 0.18)
-        local borderStyle = TBU.WindowStyles and TBU.WindowStyles:Get()
+        local borderStyle = TBU.WindowStyles and TBU.WindowStyles:GetForFrame(section)
         local neutralBorder = borderStyle and borderStyle.border or {0.22, 0.23, 0.26, 0.98}
+        local sectionFill = borderStyle and borderStyle.sectionBackground or {0, 0, 0, 0.18}
+        if opts.backgroundAlpha ~= nil then
+            sectionFill = {sectionFill[1], sectionFill[2], sectionFill[3], opts.backgroundAlpha}
+        end
+        section:SetBackdropColor(unpack(sectionFill))
         section:SetBackdropBorderColor(unpack(neutralBorder))
         if TBU.WindowStyles and TBU.WindowStyles.RegisterVisual then
             TBU.WindowStyles:RegisterVisual(section, function(target)
-                target:SetBackdropBorderColor(unpack(TBU.WindowStyles:GetForFrame(target).border))
+                local style = TBU.WindowStyles:GetForFrame(target)
+                local fill = style.sectionBackground
+                if opts.backgroundAlpha ~= nil then
+                    fill = {fill[1], fill[2], fill[3], opts.backgroundAlpha}
+                end
+                target:SetBackdropColor(unpack(fill))
+                target:SetBackdropBorderColor(unpack(style.border))
             end)
         end
     end
@@ -263,12 +273,12 @@ function L:MainHeader(section, text, opts)
     header:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8" })
     -- Source the neutral section-title fill from the SAME palette as window
     -- borders. Without an explicit color, WoW draws this as solid white.
-    local graphite = TBU.WindowStyles and TBU.WindowStyles:Get()
-    local border = graphite and graphite.border or {0.22, 0.23, 0.26, 0.98}
-    header:SetBackdropColor(unpack((graphite and graphite.sectionHeaderFill) or border))
+    local style = TBU.WindowStyles and TBU.WindowStyles:GetForFrame(header)
+    local border = style and style.border or {0.22, 0.23, 0.26, 0.98}
+    header:SetBackdropColor(unpack((style and style.sectionHeaderFill) or border))
     if TBU.WindowStyles and TBU.WindowStyles.RegisterVisual then
         TBU.WindowStyles:RegisterVisual(header, function(target)
-            local style = TBU.WindowStyles:Get()
+            local style = TBU.WindowStyles:GetForFrame(target)
             target:SetBackdropColor(unpack(style.sectionHeaderFill or style.border))
             if target.label then target.label:SetTextColor(unpack(style.sectionHeaderText or style.interactionGold)) end
         end)
@@ -278,6 +288,7 @@ function L:MainHeader(section, text, opts)
     label:SetPoint("CENTER", header, "CENTER", 0, 0)
     label:SetJustifyH("CENTER")
     label:SetText(text or "")
+    label:SetTextColor(unpack((style and style.sectionHeaderText) or (style and style.text) or {1, 1, 1, 1}))
     header.label = label
 
     RegisterChild(section, header, { role = "main-header", gapBefore = 0, flow = true })

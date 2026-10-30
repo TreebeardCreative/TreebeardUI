@@ -205,7 +205,10 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
     local resizeGrip
     local highlight = {}
     for _, side in ipairs({ "TOP", "BOTTOM", "LEFT", "RIGHT" }) do
-        local tex = Styles:CreateFlatTexture(root, "OVERLAY", { 0.50, 0.51, 0.55, 0.20 })
+        local tex = Styles:CreateFlatTexture(root, "OVERLAY", Styles:GetForFrame(root).resizeHighlight)
+        Styles:RegisterVisual(tex, function(target)
+            target:SetVertexColor(unpack(Styles:GetForFrame(target).resizeHighlight))
+        end)
         if side == "TOP" then
             tex:SetPoint("BOTTOMLEFT", root, "TOPLEFT", -1, 0)
             tex:SetPoint("BOTTOMRIGHT", root, "TOPRIGHT", 1, 0)

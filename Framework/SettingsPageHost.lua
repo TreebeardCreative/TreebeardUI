@@ -38,7 +38,12 @@ function PageHost:CreateCanvas(name, description, pageId, opts)
     local background = panel:CreateTexture(nil, "BACKGROUND")
     background:SetAllPoints(panel)
     background:SetTexture(WHITE)
-    background:SetVertexColor(0.055, 0.055, 0.065, 1.0)
+    local function repaintBackground(target)
+        local style = TBU.WindowStyles:GetForFrame(target)
+        target:SetVertexColor(unpack(style.canvasBackground))
+    end
+    TBU.WindowStyles:RegisterVisual(background, repaintBackground)
+    repaintBackground(background)
 
     local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
     title:SetPoint("TOPLEFT", 16, -16)

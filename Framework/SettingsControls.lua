@@ -95,9 +95,8 @@ inputFocusWatch:SetScript("OnUpdate", function()
     mousePreviouslyDown = down
 end)
 
--- Input icon and focused input chrome intentionally use the same accent.
--- Graphite resolves to borderHover; Midnight Flux and Brushfire opt into their
--- distinct dropdownActiveBorder accent. Keep this lookup in one place.
+-- Input icon and focused input chrome intentionally use the same semantic
+-- accent. Each preset may give this role its own value.
 local function InputHighlightColor(style)
     return style.dropdownActiveBorder or style.borderHover or style.interactionGold or style.text
 end
@@ -822,7 +821,11 @@ CreateSettingsScrollbar = function(parent, scrollFrame, button, themeMode)
     track:SetPoint("BOTTOMRIGHT", down, "TOPRIGHT", 0, 1)
     local trackTexture = track:CreateTexture(nil, "BACKGROUND")
     trackTexture:SetTexture("Interface\\Buttons\\WHITE8X8")
-    trackTexture:SetVertexColor(0.15, 0.15, 0.15, 0.9)
+    local function repaintTrack(target)
+        target:SetVertexColor(unpack(TBU.WindowStyles:GetForFrame(target).scrollTrack))
+    end
+    TBU.WindowStyles:RegisterVisual(trackTexture, repaintTrack)
+    repaintTrack(trackTexture)
     trackTexture:SetPoint("CENTER")
     trackTexture:SetWidth(3)
     trackTexture:SetPoint("TOP", 0, 0)
@@ -1198,7 +1201,11 @@ local function AddSingleDropdown(parent, label, x, y, options, getter, setter, w
                 underline:SetPoint("RIGHT", headerRow, "RIGHT",
                     -DropdownMetrics.HEADER_HORIZONTAL_INSET, 0)
                 underline:SetHeight(1)
-                underline:SetVertexColor(0.35, 0.35, 0.35, 0.9)
+                local function repaintDivider(target)
+                    target:SetVertexColor(unpack(TBU.WindowStyles:GetForFrame(target).dropdownDivider))
+                end
+                TBU.WindowStyles:RegisterVisual(underline, repaintDivider)
+                repaintDivider(underline)
             else
                 local row = CreateFrame("Button", nil, scrollContent)
                 row:SetWidth(math.max(1, menuContentWidth - DropdownMetrics.MENU_HORIZONTAL_INSET * 2)) -- measured within the scrolling viewport, not beneath the scrollbar
@@ -1370,7 +1377,11 @@ local function AddSteppedSlider(parent, label, values, x, y, getter, setter, for
     -- full-width line behind a small round scrollbar-colored thumb.
     local track = slider:CreateTexture(nil, "BACKGROUND")
     track:SetTexture("Interface\\Buttons\\WHITE8X8")
-    track:SetVertexColor(0.15, 0.15, 0.15, 0.90)
+    local function repaintTrack(target)
+        target:SetVertexColor(unpack(TBU.WindowStyles:GetForFrame(target).sliderTrack))
+    end
+    TBU.WindowStyles:RegisterVisual(track, repaintTrack)
+    repaintTrack(track)
     track:SetPoint("LEFT", slider, "LEFT", 0, 0)
     track:SetPoint("RIGHT", slider, "RIGHT", 0, 0)
     track:SetHeight(metrics.SLIDER_TRACK_HEIGHT)
@@ -2040,20 +2051,44 @@ ApplyRecessedInput = function(edit, rightInset)
     addLayer(0, 0, 0, -7) -- theme border
     addLayer(1, 0, 0, -6) -- inset dark fill
     edit:SetTextInsets(6, rightInset or 7, 0, 0)
-    local function repaint()
+    local function paintShadow()
+        local style = TBU.WindowStyles:GetForFrame(edit)
+        for _, texture in ipairs(layers[1]) do
+            texture:SetVertexColor(unpack(style.inputShadow))
+        end
+    end
+    local function paintBorder()
         local style = TBU.WindowStyles:GetForFrame(edit)
         local border = edit:HasFocus() and InputHighlightColor(style)
             or (style.border or style.borderHover)
-        local bg = style.background or {0.05, 0.05, 0.05, 1}
-        for _, texture in ipairs(layers[1]) do texture:SetVertexColor(0, 0, 0, 0.55) end
         for _, texture in ipairs(layers[2]) do
             texture:SetVertexColor(border[1], border[2], border[3], edit:HasFocus() and 1 or 0.28)
         end
+    end
+    local function paintFill()
+        local bg = TBU.WindowStyles:GetForFrame(edit).background
         for _, texture in ipairs(layers[3]) do
             texture:SetVertexColor(bg[1] * 0.62, bg[2] * 0.62, bg[3] * 0.62, 0.98)
         end
     end
-    TBU.WindowStyles:RegisterVisual(edit, repaint)
+    -- Register each visual region separately. The EditBox itself is also
+    -- registered by ApplyRoleColor, and RegisterVisual intentionally keeps
+    -- one callback per frame; storing chrome repaint on the EditBox would be
+    -- replaced by the text-color callback.
+    for _, texture in ipairs(layers[1]) do
+        TBU.WindowStyles:RegisterVisual(texture, paintShadow)
+    end
+    for _, texture in ipairs(layers[2]) do
+        TBU.WindowStyles:RegisterVisual(texture, paintBorder)
+    end
+    for _, texture in ipairs(layers[3]) do
+        TBU.WindowStyles:RegisterVisual(texture, paintFill)
+    end
+    local function repaint()
+        paintShadow()
+        paintBorder()
+        paintFill()
+    end
     edit.RepaintInputChrome = repaint
     edit:HookScript("OnEditFocusGained", function() WatchInputFocus(edit); repaint() end)
     edit:HookScript("OnEditFocusLost", function() StopWatchingInput(edit); repaint() end)
@@ -2198,15 +2233,20 @@ local function AddDraggableOrderedListContent(parent, labelText, initialValues, 
             edgeFile="Interface\\Buttons\\WHITE8X8",
             edgeSize=1,
         })
-        row:SetBackdropColor(0.07, 0.07, 0.07, 0.45)
-        row:SetBackdropBorderColor(0.30, 0.30, 0.30, 0.8)
         -- Shared ordered-list hover feedback; independent of Groups semantics.
         local hover = row:CreateTexture(nil, "ARTWORK")
         hover:SetAllPoints(row)
         hover:SetTexture("Interface\\Buttons\\WHITE8X8")
-        hover:SetVertexColor(0.65, 0.75, 0.95, 0.14)
         hover:Hide()
         row.hover = hover
+        local function repaintRow(target)
+            local style = TBU.WindowStyles:GetForFrame(target)
+            target:SetBackdropColor(unpack(style.orderedRowBackground))
+            target:SetBackdropBorderColor(unpack(style.orderedRowBorder))
+            target.hover:SetVertexColor(unpack(style.orderedRowHover))
+        end
+        TBU.WindowStyles:RegisterVisual(row, repaintRow)
+        repaintRow(row)
         row:SetScript("OnEnter", function(self) self.hover:Show() end)
         row:SetScript("OnLeave", function(self) self.hover:Hide() end)
         row:SetMovable(true)

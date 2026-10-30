@@ -3,16 +3,16 @@ local _, private = ...
 if (private.__TBUISkip or private.__TreebeardUISkip) then return end
 local TBU = (private.__TBUIRuntime or private.__TreebeardUIRuntime) or private
 
--- Window appearance is deliberately independent of Group appearance. The
--- registry is the future seam for applying presets to windows, Groups, or both.
--- The development framework uses ONE neutral window preset; live Main controls
--- retain their original Blizzard-compatible skin for parity testing. No selector yet.
+-- Warm Warcraft is the complete default palette and fallback. TreebeardUI
+-- ships its built-in presets; consumers choose which ones to offer, and may
+-- add their own presets. Consumers choose which shipped presets to expose in
+-- their own UI; do not remove presets from the shared library registry.
 local Styles = {}
 TBU.WindowStyles = Styles
 
 local WHITE = "Interface\\Buttons\\WHITE8X8"
-Styles.DefaultPreset = "graphite"
-Styles.ActivePreset = "graphite"
+Styles.DefaultPreset = "warm_warcraft"
+Styles.ActivePreset = "warm_warcraft"
 Styles.ConsumerPresets = {}
 Styles.RenderOwner = nil
 Styles.Presets = {
@@ -42,8 +42,25 @@ Styles.Presets = {
         sectionCanvasBottom = 15,
         pageTitleTop = 8,
         pageDescriptionTop = 32,
+        -- Graphite owns defaults for every visible color role. Other presets
+        -- inherit these unless they deliberately choose a different color.
         resizeGripIdle = { 0.69020, 0.71373, 0.75294, 1.00 }, -- #B0B6C0
         interactionGold = { 0.81176, 0.83529, 0.87451, 1.00 }, -- #CFD5DF, neutral accent
+        sectionHeaderFill = { 0.17255, 0.18824, 0.21176, 1.00 }, -- #2C3036; same as title, independent role
+        sectionHeaderText = { 0.93333, 0.94118, 0.95294, 1.00 }, -- #EEF0F3; same as text, independent role
+        dropdownFieldBorder = { 0.60000, 0.63529, 0.69020, 1.00 }, -- #99A2B0; same as borderHover, independent role
+        dropdownActiveBorder = { 0.81176, 0.83529, 0.87451, 1.00 }, -- #CFD5DF; same as interactionGold, independent role
+        dropdownPopupBorder = { 0.81176, 0.83529, 0.87451, 1.00 }, -- #CFD5DF; same as interactionGold, independent role
+        dropdownDivider = { 0.35, 0.35, 0.35, 0.90 },
+        canvasBackground = { 0.055, 0.055, 0.065, 1.0 }, -- #0E0E11
+        sectionBackground = { 0, 0, 0, 0.18 },
+        inputShadow = { 0, 0, 0, 0.55 },
+        scrollTrack = { 0.15, 0.15, 0.15, 0.90 },
+        sliderTrack = { 0.15, 0.15, 0.15, 0.90 }, -- same current value as scrollTrack; independent role
+        orderedRowBackground = { 0.07, 0.07, 0.07, 0.45 },
+        orderedRowBorder = { 0.30, 0.30, 0.30, 0.8 },
+        orderedRowHover = { 0.65, 0.75, 0.95, 0.14 },
+        resizeHighlight = { 0.50, 0.51, 0.55, 0.20 },
         navigationWidth = 155,
         navigationGap = 12,
         contentSectionWidth = 540,
@@ -55,12 +72,10 @@ Styles.Presets = {
     },
 }
 
--- Style-color policy: keep semantic tokens where their behavior differs, but
--- alias values that are intentionally the same. This prevents palette edits from
--- silently desynchronizing matching borders, headings and interaction accents.
--- A consumer can still override any semantic token explicitly in a custom preset.
--- Experimental v1.0 theme tokens. The geometry stays identical between
--- presets; consumers choose the name, the library owns the appearance.
+-- Keep semantic roles as independent palette entries even when two Graphite
+-- roles currently share a color. Other presets may distinguish those roles.
+-- Other styles clone Graphite first, then override only intentionally distinct
+-- values. Geometry stays shared between presets.
 local function ClonePreset(base)
     local out = {}
     for k, v in pairs(base) do
@@ -74,14 +89,79 @@ local function ClonePreset(base)
     end
     return out
 end
--- Graphite uses the same semantic appearance roles as the colorful presets.
--- The values are aliases to established roles rather than extra color inputs.
 local graphite = Styles.Presets.graphite
-graphite.sectionHeaderFill = graphite.title
-graphite.sectionHeaderText = graphite.text
-graphite.dropdownFieldBorder = graphite.borderHover
-graphite.dropdownActiveBorder = graphite.interactionGold
-graphite.dropdownPopupBorder = graphite.interactionGold
+
+-- Warm Warcraft is an experiment based on Forever's dark, bronze-and-gold UI.
+-- Keep every color role explicit here so this palette can later become the
+-- default without silently inheriting missing values from Graphite.
+Styles.Presets.warm_warcraft = {
+    -- Main surfaces
+    background = {0.10980, 0.09804, 0.09020, 0.98}, -- #1C1917; lifted, less yellow
+    panel = {0.16078, 0.13725, 0.11765, 0.96}, -- #29231E; lifted neutral brown
+    canvasBackground = {0.06667, 0.05882, 0.05490, 1.00}, -- #110F0E
+    sectionBackground = {0.16078, 0.13725, 0.11765, 0.42}, -- #29231E at restrained opacity
+
+    -- Window, section, and control borders
+    border = {0.42353, 0.32941, 0.21961, 1.00}, -- #6C5438
+    borderHover = {0.66275, 0.49020, 0.27059, 1.00}, -- #A97D45
+    borderDrag = {0.88235, 0.72157, 0.24706, 1.00}, -- #E1B83F
+    dropdownFieldBorder = {0.42353, 0.32941, 0.21961, 1.00}, -- #6C5438; same as border, independent role
+    dropdownActiveBorder = {0.88235, 0.72157, 0.24706, 1.00}, -- #E1B83F
+    dropdownPopupBorder = {0.66275, 0.49020, 0.27059, 1.00}, -- #A97D45
+    dropdownDivider = {0.36, 0.27, 0.16, 0.90},
+    orderedRowBorder = {0.42353, 0.32941, 0.21961, 0.80}, -- #6C5438
+
+    -- Window and section headings
+    title = {0.22353, 0.18431, 0.15294, 1.00}, -- #392F27
+    titleHover = {0.30980, 0.24706, 0.18824, 1.00}, -- #4F3F30
+    sectionHeaderFill = {0.25882, 0.20000, 0.14510, 1.00}, -- #423324
+    sectionHeaderText = {0.88235, 0.72157, 0.24706, 1.00}, -- #E1B83F
+
+    -- Text
+    text = {0.94118, 0.90588, 0.84314, 1.00}, -- #F0E7D7
+    muted = {0.72549, 0.66667, 0.56863, 1.00}, -- #B9AA91
+
+    -- Interaction and selection
+    interactionGold = {0.88235, 0.72157, 0.24706, 1.00}, -- #E1B83F
+    buttonSelectedBackground = {0.21961, 0.16471, 0.09412, 1.00}, -- #382A18
+    buttonSelectedBorder = {0.76863, 0.60392, 0.27059, 1.00}, -- #C49A45
+    buttonSelectedText = {0.94118, 0.90588, 0.84314, 1.00}, -- #F0E7D7; same as text, independent role
+    resizeGripIdle = {0.72549, 0.66667, 0.56863, 1.00}, -- #B9AA91; same as muted, independent role
+    resizeHighlight = {0.88235, 0.72157, 0.24706, 0.20}, -- #E1B83F
+
+    -- Buttons, fields, and scrolling controls
+    button = {0.18824, 0.15686, 0.12941, 1.00}, -- #302820
+    buttonHover = {0.25098, 0.20000, 0.12941, 1.00}, -- #403321; keep approved hover color
+    inputShadow = {0, 0, 0, 0.55},
+    scrollTrack = {0.13, 0.11, 0.10, 0.90},
+    sliderTrack = {0.13, 0.11, 0.10, 0.90}, -- same current value as scrollTrack, independent role
+
+    -- Reorderable list rows
+    orderedRowBackground = {0.07, 0.05, 0.03, 0.58},
+    orderedRowHover = {0.88, 0.72, 0.25, 0.14},
+
+    -- Shared geometry; each value is explicit for future standalone use
+    edgeSize = 1,
+    titleHeight = 29,
+    paneHeaderHeight = 62,
+    paneFooterHeight = 36,
+    paneGutter = 18,
+    paneBorderInset = 0,
+    sectionCanvasLeft = 12,
+    sectionCanvasRight = 12,
+    sectionCanvasTop = 15,
+    sectionCanvasBottom = 15,
+    pageTitleTop = 8,
+    pageDescriptionTop = 32,
+    navigationWidth = 155,
+    navigationGap = 12,
+    contentSectionWidth = 540,
+    sectionColumnGap = 12,
+    settingsSize = {801, 620, 801, 620},
+    debugSize = {710, 395, 530, 290},
+    edgeInside = 6,
+    edgeOutside = 5,
+}
 
 -- Midnight Flux: navy/purple surfaces and restrained sunset-orange accents.
 Styles.Presets.midnight_flux = ClonePreset(Styles.Presets.graphite)
@@ -142,7 +222,8 @@ end
 
 -- Each consumer opts into its own preset. No consumer state is stored here;
 -- callers supply the owner ID and persist the choice in their SavedVariables.
--- Unregistered consumers always see Graphite.
+-- Unregistered consumers see the framework default. Consumers can offer any
+-- built-in preset and register their own in Presets.
 local function FindOwner(frame)
     local current = frame
     for _ = 1, 48 do
@@ -259,12 +340,20 @@ end
 
 -- Shared action button states. Press feedback is transient; persistent selected
 -- state belongs to the consuming control, not every action button.
-function Styles:ApplyButton(button, hovered, presetName)
+function Styles:ApplyButton(button, hovered, presetName, selected)
     local style = self:Get(presetName or (FindOwner(button) and self:GetConsumerPreset(FindOwner(button))))
     local enabled = not button.IsEnabled or button:IsEnabled()
     local pressed = enabled and button.tbuPressed == true
-    local fill = pressed and style.background or (enabled and hovered and style.buttonHover or style.button)
-    local border = pressed and style.borderDrag or (enabled and hovered and style.borderHover or style.border)
+    local isSelected = selected == nil and button.tbuSelected == true or selected == true
+    local selectedFill = isSelected and (style.buttonSelectedBackground or style.buttonHover)
+    local selectedBorder = isSelected and (style.buttonSelectedBorder or style.borderHover)
+    local fill = pressed and style.background
+        or selectedFill
+        or (enabled and hovered and style.buttonHover or style.button)
+    local border = pressed and style.borderDrag
+        or selectedBorder
+        or (isSelected and style.borderHover)
+        or (enabled and hovered and style.borderHover or style.border)
     -- Controlled hudcraft v1.0.18 border comparison: keep the normal
     -- interaction colors but use a single native WHITE8X8 backdrop edge.
     -- Avoid creating independent overlay textures on real action buttons.
@@ -276,7 +365,8 @@ function Styles:ApplyButton(button, hovered, presetName)
         for _, edge in ipairs(button._tbuInnerBorder) do edge:Hide() end
     end
     if button.label then
-        local rgb = enabled and (pressed and style.muted or style.text) or style.muted
+        local selectedText = isSelected and style.buttonSelectedText
+        local rgb = enabled and (pressed and style.muted or selectedText or style.text) or style.muted
         button.label:SetTextColor(unpack(rgb))
         button.label:SetAlpha(enabled and 1 or 0.60)
     end
@@ -299,12 +389,13 @@ function Styles:CreateButton(parent, label, width, onClick, presetName)
     text:SetTextColor(unpack(style.text))
     button.label = text
     button.tbuPressed = false
+    button.tbuSelected = false
     self:ApplyButton(button, false, presetName)
     self:RegisterVisual(button, function(b)
-        Styles:ApplyButton(b, b:IsMouseOver(), presetName)
+        Styles:ApplyButton(b, b:IsMouseOver(), presetName, b.tbuSelected)
     end)
     local function Repaint(b)
-        Styles:ApplyButton(b, b:IsMouseOver(), presetName)
+        Styles:ApplyButton(b, b:IsMouseOver(), presetName, b.tbuSelected)
     end
     button:SetScript("OnEnter", Repaint)
     button:SetScript("OnLeave", Repaint)
