@@ -154,10 +154,17 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
     -- Header/footer are structural slots, not page-specific content builders.
     function root:CreatePane(parent, options)
         options = options or {}
+        -- Navigation is a reusable pane role, not a Settings-window special
+        -- case. The consumer still supplies its own navigation items/actions.
+        local isNavigationPane = options.navigation == true
+        local hasHeader = options.header == true or isNavigationPane
+        -- Pane headers (including navigation headers) use the page-header
+        -- surface by default. Consumers can request a section header explicitly.
+        local sectionHeader = options.headerStyle == "section"
         local pane = TBU.Compatibility:CreateBackdropFrame("Frame", parent)
         Styles:ApplyPanel(pane) -- resolve the pane owner on every repaint
         local paneStyle = Styles:Get(Styles:GetConsumerPreset(owner))
-        local headerHeight = options.header and (options.headerHeight or paneStyle.paneHeaderHeight) or 0
+        local headerHeight = hasHeader and (options.headerHeight or paneStyle.paneHeaderHeight) or 0
         local footerHeight = options.footer and (options.footerHeight or paneStyle.paneFooterHeight) or 0
         local headerRegion, footerRegion
         if headerHeight > 0 then
@@ -165,6 +172,20 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
             headerRegion:SetPoint("TOPLEFT", pane, "TOPLEFT", 1, -1)
             headerRegion:SetPoint("TOPRIGHT", pane, "TOPRIGHT", -1, -1)
             headerRegion:SetHeight(headerHeight)
+            local headerFill = sectionHeader and paneStyle.sectionHeaderFill or paneStyle.panel
+            local fill = Styles:CreateFlatTexture(headerRegion, "BACKGROUND", headerFill)
+            fill:SetAllPoints(headerRegion)
+            Styles:RegisterVisual(fill, function(target)
+                local currentOwner = target
+                for _ = 1, 48 do
+                    if not currentOwner then break end
+                    if currentOwner.storageOwner then break end
+                    currentOwner = currentOwner.GetParent and currentOwner:GetParent() or nil
+                end
+                local currentStyle = Styles:Get(currentOwner and Styles:GetConsumerPreset(currentOwner))
+                local color = sectionHeader and currentStyle.sectionHeaderFill or currentStyle.panel
+                target:SetVertexColor(unpack(color))
+            end)
             Styles:CreateSeparator(headerRegion, "bottom", nil)
         end
         if footerHeight > 0 then
@@ -193,6 +214,73 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
         pane.headerRegion = headerRegion
         pane.body = body
         pane.footerRegion = footerRegion
+        pane.isNavigationPane = isNavigationPane
+        if isNavigationPane then pane.navigationRegion = headerRegion end
+        if headerRegion then
+            local headerLabel, headerNote
+            local autoSizeHeader = options.headerAutoSize ~= false or isNavigationPane
+            local paddingX = tonumber(options.headerPaddingX) or paneStyle.paneHeaderPaddingX or 12
+            local paddingY = tonumber(options.headerPaddingY) or paneStyle.paneHeaderPaddingY or 10
+            local textGap = tonumber(options.headerTextGap) or paneStyle.paneHeaderTextGap or 4
+            local function FitHeader()
+                if not headerLabel then return end
+                local width = math.max(1, headerRegion:GetWidth() - paddingX * 2)
+                headerLabel:SetWidth(width)
+                if headerNote then headerNote:SetWidth(width) end
+                headerLabel:ClearAllPoints()
+                headerLabel:SetPoint("TOPLEFT", headerRegion, "TOPLEFT", paddingX, -paddingY)
+                if headerNote then
+                    headerNote:ClearAllPoints()
+                    headerNote:SetPoint("TOPLEFT", headerLabel, "BOTTOMLEFT", 0, -textGap)
+                end
+                local titleHeight = math.max(1, headerLabel:GetStringHeight() or headerLabel:GetHeight() or 1)
+                local noteHeight = headerNote and headerNote:IsShown()
+                    and math.max(1, headerNote:GetStringHeight() or headerNote:GetHeight() or 1) or 0
+                if autoSizeHeader then
+                    local measuredHeight = paddingY + titleHeight + (noteHeight > 0 and textGap + noteHeight or 0) + paddingY
+                    if math.abs(headerRegion:GetHeight() - measuredHeight) > 0.5 then
+                        headerRegion:SetHeight(measuredHeight)
+                    end
+                elseif noteHeight <= 0 then
+                    headerLabel:ClearAllPoints()
+                    headerLabel:SetPoint("LEFT", headerRegion, "LEFT", paddingX, 0)
+                end
+            end
+            function pane:SetHeaderText(titleText, noteText)
+                if not headerLabel then
+                    headerLabel = headerRegion:CreateFontString(nil, "ARTWORK", options.headerFont or "GameFontNormalLarge")
+                    headerLabel:SetJustifyH("LEFT")
+                    headerLabel:SetJustifyV("TOP")
+                    Styles:RegisterVisual(headerLabel, function(target)
+                        target:SetTextColor(unpack(Styles:GetTextColor("header", target)))
+                    end)
+                    if not autoSizeHeader then headerLabel:SetJustifyV("MIDDLE") end
+                end
+                headerLabel:SetText(titleText or "")
+                headerLabel:Show()
+                if noteText and noteText ~= "" then
+                    if not headerNote then
+                        headerNote = headerRegion:CreateFontString(nil, "ARTWORK", options.headerNoteFont or "GameFontHighlightSmall")
+                        headerNote:SetJustifyH("LEFT")
+                        headerNote:SetJustifyV("TOP")
+                        Styles:RegisterVisual(headerNote, function(target)
+                            target:SetTextColor(unpack(Styles:GetTextColor("notes", target)))
+                        end)
+                    end
+                    headerNote:SetText(noteText)
+                    headerNote:Show()
+                elseif headerNote then
+                    headerNote:SetText("")
+                    headerNote:Hide()
+                end
+                FitHeader()
+            end
+            headerRegion:HookScript("OnSizeChanged", FitHeader)
+            if options.headerText or options.navigationTitle then
+                pane:SetHeaderText(options.headerText or options.navigationTitle,
+                    options.headerNote or options.navigationNote)
+            end
+        end
         pane:EnableMouse(true)
         pane:SetScript("OnMouseDown", function() Host:BringToFront(root) end)
         return pane
