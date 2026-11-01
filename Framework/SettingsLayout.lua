@@ -304,7 +304,10 @@ end
 function L:MainHeader(section, text, opts)
     opts = opts or {}
     local header = TBU.Compatibility:CreateBackdropFrame("Frame", section)
-    header:SetHeight(opts.height or L.Metrics.SECTION_HEADER_HEIGHT)
+    local minHeight = tonumber(opts.height) or L.Metrics.SECTION_HEADER_HEIGHT
+    local paddingX = math.max(0, tonumber(opts.paddingX) or 8)
+    local paddingY = math.max(0, tonumber(opts.paddingY) or 4)
+    header:SetHeight(minHeight)
     header:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8" })
     -- Source the neutral section-title fill from the SAME palette as window
     -- borders. Without an explicit color, WoW draws this as solid white.
@@ -320,11 +323,28 @@ function L:MainHeader(section, text, opts)
     end
 
     local label = header:CreateFontString(nil, "ARTWORK", opts.fontObject or "GameFontNormal")
-    label:SetPoint("CENTER", header, "CENTER", 0, 0)
+    label:SetPoint("TOPLEFT", header, "TOPLEFT", paddingX, -paddingY)
+    label:SetPoint("TOPRIGHT", header, "TOPRIGHT", -paddingX, -paddingY)
     label:SetJustifyH("CENTER")
+    label:SetJustifyV("TOP")
+    label:SetWordWrap(opts.wrap ~= false)
+    if label.SetNonSpaceWrap then label:SetNonSpaceWrap(opts.wrap ~= false) end
     label:SetText(text or "")
     label:SetTextColor(unpack((style and style.sectionHeaderText) or (style and style.text) or {1, 1, 1, 1}))
     header.label = label
+
+    local function FitHeader()
+        local width = tonumber(header:GetWidth()) or 0
+        if width <= paddingX * 2 then return end
+        SetWidthIfChanged(label, width - (paddingX * 2))
+        local textHeight = math.ceil(label:GetStringHeight() or 0)
+        local targetHeight = math.max(minHeight, textHeight + (paddingY * 2))
+        if math.abs((header:GetHeight() or 0) - targetHeight) > 0.5 then
+            header:SetHeight(targetHeight)
+        end
+    end
+    header:HookScript("OnSizeChanged", FitHeader)
+    FitHeader()
 
     RegisterChild(section, header, { role = "main-header", gapBefore = 0, flow = true })
     return header, label
@@ -333,9 +353,13 @@ end
 function L:Note(section, text, opts)
     opts = opts or {}
     local note = section:CreateFontString(nil, "ARTWORK", opts.fontObject or "GameFontDisableSmall")
+    -- Notes placed directly in Columns should fill the Column and wrap by
+    -- default. Consumers can pass wrap=false for intentionally fixed-width text.
+    note.layoutWrap = opts.wrap ~= false
     note:SetJustifyH(opts.justifyH or "CENTER")
     note:SetJustifyV("TOP")
-    note:SetWordWrap(true)
+    note:SetWordWrap(opts.wrap ~= false)
+    if note.SetNonSpaceWrap then note:SetNonSpaceWrap(opts.wrap ~= false) end
     note:SetText(text or "")
     if TBU.WindowStyles then
         local function repaintNote(target)

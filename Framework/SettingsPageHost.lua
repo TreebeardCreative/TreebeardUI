@@ -57,9 +57,15 @@ function PageHost:CreateCanvas(name, description, pageId, opts)
 
     local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
     title:SetPoint("TOPLEFT", 16, -16)
+    title:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -16, -16)
+    title:SetWordWrap(opts.titleWrap ~= false)
+    if title.SetNonSpaceWrap then title:SetNonSpaceWrap(opts.titleWrap ~= false) end
     title:SetText(opts.title or name or "Settings")
     local desc = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
     desc:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -6)
+    desc:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -16, -16)
+    desc:SetWordWrap(opts.descriptionWrap ~= false)
+    if desc.SetNonSpaceWrap then desc:SetNonSpaceWrap(opts.descriptionWrap ~= false) end
     desc:SetText(description or "")
     if TBU.WindowStyles then
         local function repaintDescription(target)
@@ -73,6 +79,20 @@ function PageHost:CreateCanvas(name, description, pageId, opts)
     if opts.styleDescription then opts.styleDescription(desc) end
 
     local scroll, content, scrollbar = CreateScroll(panel, 58, 8, true)
+    local function FitCanvasHeader()
+        local width = math.max(1, (tonumber(panel:GetWidth()) or 0) - 32)
+        title:SetWidth(width)
+        desc:SetWidth(width)
+        local titleHeight = math.max(1, math.ceil(title:GetStringHeight() or 1))
+        local description = desc:GetText() or ""
+        local descHeight = description ~= "" and math.max(1, math.ceil(desc:GetStringHeight() or 1)) or 0
+        local topOffset = math.max(58, 16 + titleHeight + (descHeight > 0 and 6 + descHeight + 6 or 0))
+        scroll:ClearAllPoints()
+        scroll:SetPoint("TOPLEFT", panel, "TOPLEFT", 8, -topOffset)
+        scroll:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -TBU.SettingsControls.ScrollbarGutterWidth, 8)
+    end
+    panel:HookScript("OnSizeChanged", FitCanvasHeader)
+    FitCanvasHeader()
     local layout = TBU.SettingsLayout:Page(content, pageId, { padding = 0 })
     local host = { panel=panel, scroll=scroll, content=content,
         scrollbar=scrollbar, layout=layout, pageId=pageId, rows={}, sections={} }

@@ -166,6 +166,9 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
     heading:SetText(title)
     heading:SetTextColor(unpack(style.text))
     heading:SetJustifyH("LEFT")
+    heading:SetJustifyV("MIDDLE")
+    heading:SetWordWrap(true)
+    if heading.SetNonSpaceWrap then heading:SetNonSpaceWrap(true) end
     header.label = heading
 
     local content = CreateFrame("Frame", nil, root)
@@ -264,7 +267,7 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
         if footerRegion then
             local footerLayoutOptions
             local lastFooterWidth
-            local function FitFooterRow()
+            local function LayoutFooterRowAtCurrentWidth()
                 if not pane._footerRow or not footerLayoutOptions then return end
                 local width = footerRegion:GetWidth()
                 if not width or width <= 1 then return end
@@ -274,6 +277,20 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
                 if layout and layout.LayoutRowInRegion then
                     layout:LayoutRowInRegion(pane._footerRow, footerRegion, footerLayoutOptions)
                 end
+            end
+            local footerLayoutUpdate = CreateFrame("Frame", nil, pane)
+            footerLayoutUpdate:Hide()
+            footerLayoutUpdate:SetScript("OnUpdate", function(self)
+                self:Hide()
+                -- Coalesce footer reflow until the current resize/layout pass
+                -- has finished resolving the pane and its anchored children.
+                LayoutFooterRowAtCurrentWidth()
+            end)
+            local function FitFooterRow()
+                if not pane._footerRow or not footerLayoutOptions then return end
+                local width = footerRegion:GetWidth()
+                if not width or width <= 1 then return end
+                footerLayoutUpdate:Show()
             end
             function pane:LayoutFooterRow(row, rowOptions)
                 if not row or not footerRegion then return end
@@ -363,6 +380,10 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
                     headerLabel = headerRegion:CreateFontString(nil, "ARTWORK", options.headerFont or "GameFontNormalLarge")
                     headerLabel:SetJustifyH("LEFT")
                     headerLabel:SetJustifyV("TOP")
+                    headerLabel:SetWordWrap(options.headerWrap ~= false)
+                    if headerLabel.SetNonSpaceWrap then
+                        headerLabel:SetNonSpaceWrap(options.headerWrap ~= false)
+                    end
                     Styles:RegisterVisual(headerLabel, function(target)
                         target:SetTextColor(unpack(Styles:GetTextColor("header", target)))
                     end)
@@ -375,6 +396,10 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
                         headerNote = headerRegion:CreateFontString(nil, "ARTWORK", options.headerNoteFont or "GameFontHighlightSmall")
                         headerNote:SetJustifyH("LEFT")
                         headerNote:SetJustifyV("TOP")
+                        headerNote:SetWordWrap(options.headerNoteWrap ~= false)
+                        if headerNote.SetNonSpaceWrap then
+                            headerNote:SetNonSpaceWrap(options.headerNoteWrap ~= false)
+                        end
                         Styles:RegisterVisual(headerNote, function(target)
                             target:SetTextColor(unpack(Styles:GetTextColor("notes", target)))
                         end)
@@ -757,7 +782,7 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
         self.collapsed = collapsed
         if self.collapsed then
             content:Hide()
-            self:SetHeight(style.titleHeight + 2)
+            self:SetHeight(header:GetHeight() + 2)
         else
             self:SetHeight(self.expandedHeight)
             content:Show()
@@ -784,6 +809,19 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
     collapse:SetHeight(24)
     SetWindowButtonGlyph(collapse, "minimize_icon")
     root.collapseButton = collapse
+
+    heading:SetPoint("RIGHT", collapse, "LEFT", -8, 0)
+    local function FitWindowTitle()
+        if (tonumber(heading:GetWidth()) or 0) <= 1 then return end
+        local titleHeight = math.max(1, math.ceil(heading:GetStringHeight() or 1))
+        local targetHeight = math.max(style.titleHeight, titleHeight + 4)
+        if math.abs((header:GetHeight() or 0) - targetHeight) > 0.5 then
+            header:SetHeight(targetHeight)
+            if root.collapsed then root:SetHeight(targetHeight + 2) end
+        end
+    end
+    header:HookScript("OnSizeChanged", FitWindowTitle)
+    FitWindowTitle()
 
     -- Defer loading collapsed state until first Show, when the expanded
     -- geometry is resolved and TOPRIGHT can be captured precisely.
