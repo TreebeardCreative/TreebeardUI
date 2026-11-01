@@ -10,6 +10,45 @@ TBU.WindowFrame = {}
 local Host = TBU.WindowFrame
 local Styles = TBU.WindowStyles
 
+local function EffectiveScale(frame)
+    local scale = frame and frame.GetEffectiveScale and frame:GetEffectiveScale()
+    return type(scale) == "number" and scale > 0 and scale or 1
+end
+
+local function SnapToPixel(value, scale)
+    scale = type(scale) == "number" and scale > 0 and scale or 1
+    return math.floor((tonumber(value) or 0) * scale + 0.5) / scale
+end
+
+local function SnapWindowRectangle(frame, preserveLogicalSize)
+    local left, right = frame:GetLeft(), frame:GetRight()
+    local bottom, top = frame:GetBottom(), frame:GetTop()
+    local parentLeft, parentBottom = UIParent:GetLeft(), UIParent:GetBottom()
+    if not (left and right and bottom and top and parentLeft and parentBottom) then return false end
+
+    -- Anchor offsets use the parent's scale; local frame dimensions use the
+    -- frame's effective scale. Align all four visible edges, then derive the
+    -- dimensions from those integer-pixel boundaries.
+    local parentScale = EffectiveScale(UIParent)
+    local frameScale = EffectiveScale(frame)
+    local leftPixel = math.floor((left - parentLeft) * parentScale + 0.5)
+    local rightPixel = math.floor((right - parentLeft) * parentScale + 0.5)
+    local bottomPixel = math.floor((bottom - parentBottom) * parentScale + 0.5)
+    local topPixel = math.floor((top - parentBottom) * parentScale + 0.5)
+    local widthPixels = math.max(1, rightPixel - leftPixel)
+    local heightPixels = math.max(1, topPixel - bottomPixel)
+
+    frame:ClearAllPoints()
+    frame:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT",
+        leftPixel / parentScale, bottomPixel / parentScale)
+    frame:SetSize(widthPixels / frameScale, heightPixels / frameScale)
+    if not preserveLogicalSize then
+        if frame.expandedWidth ~= nil then frame.expandedWidth = frame:GetWidth() end
+        if frame.expandedHeight ~= nil and not frame.collapsed then frame.expandedHeight = frame:GetHeight() end
+    end
+    return true
+end
+
 -- One ordered stack per addon, not a continuously incrementing frame-level
 -- counter. Keeps windows at DIALOG while guaranteeing the selected window
 -- draws above other addon windows, including border handles and buttons.
@@ -55,6 +94,7 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
     root.defaultWindowWidth = width
     root.defaultWindowHeight = height
     function root:BringToFront() Host:BringToFront(self) end
+    local hovering, dragging, resizing = false, false, false
     -- Native UI scale is the default. The sandbox may explicitly apply an
     -- independent window scale through SetWindowUIScale without changing UIParent.
     function root:SetWindowUIScale(scale)
@@ -62,6 +102,7 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
         scale = math.max(0.75, math.min(1.10, scale))
         self:SetScale(scale)
         self:SetClampedToScreen(true)
+        SnapWindowRectangle(self, true)
     end
     root.minimumWidth = math.max(320, tonumber(minWidth) or 320)
     root.minimumHeight = math.max(120, tonumber(minHeight) or 120)
@@ -93,6 +134,9 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
         elseif self:GetWidth() ~= self.expandedWidth or self:GetHeight() ~= self.expandedHeight then
             self:SetSize(self.expandedWidth, self.expandedHeight)
         end
+        if not resizing then SnapWindowRectangle(self) end
+        self.expandedWidth = self:GetWidth()
+        if not self.collapsed then self.expandedHeight = self:GetHeight() end
     end
     root:SetFrameStrata("DIALOG")
     root:SetMovable(true)
@@ -108,6 +152,7 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
     else
         root:SetPoint("CENTER", UIParent, "CENTER", defaultX or 0, defaultY or 0)
     end
+    SnapWindowRectangle(root)
 
     local header = CreateFrame("Frame", nil, root)
     header:SetHeight(style.titleHeight)
@@ -216,6 +261,73 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
         pane.footerRegion = footerRegion
         pane.isNavigationPane = isNavigationPane
         if isNavigationPane then pane.navigationRegion = headerRegion end
+        if footerRegion then
+            local footerLayoutOptions
+            local lastFooterWidth
+            local function FitFooterRow()
+                if not pane._footerRow or not footerLayoutOptions then return end
+                local width = footerRegion:GetWidth()
+                if not width or width <= 1 then return end
+                if width == lastFooterWidth then return end
+                lastFooterWidth = width
+                local layout = TBU.SettingsLayout
+                if layout and layout.LayoutRowInRegion then
+                    layout:LayoutRowInRegion(pane._footerRow, footerRegion, footerLayoutOptions)
+                end
+            end
+            function pane:LayoutFooterRow(row, rowOptions)
+                if not row or not footerRegion then return end
+                rowOptions = rowOptions or {}
+                footerLayoutOptions = {
+                    insetX = tonumber(rowOptions.insetX) or paneStyle.paneFooterPaddingX or 12,
+                    insetY = rowOptions.insetY == nil
+                        and (paneStyle.paneFooterPaddingY or 6) or rowOptions.insetY,
+                    minHeight = rowOptions.minHeight == nil
+                        and (paneStyle.paneFooterHeight or 0) or rowOptions.minHeight,
+                }
+                pane._footerRow = row
+                lastFooterWidth = nil
+                FitFooterRow()
+                return footerRegion:GetHeight()
+            end
+            footerRegion:HookScript("OnSizeChanged", FitFooterRow)
+        end
+        if isNavigationPane then
+            local navigationItems
+            local lastNavigationWidth
+            local function FitNavigationItems()
+                if not body or type(navigationItems) ~= "table" then return end
+                local width = body:GetWidth()
+                if not width or width <= 1 or width == lastNavigationWidth then return end
+                lastNavigationWidth = width
+                local itemHeight = tonumber(options.navigationItemHeight)
+                    or paneStyle.navigationItemHeight or 28
+                local itemInset = tonumber(options.navigationItemInset)
+                    or paneStyle.navigationItemInset or 8
+                local itemWidth = math.max(1, width - (2 * itemInset))
+                for _, item in ipairs(navigationItems) do
+                    if item then
+                        if item.SetSize then item:SetSize(itemWidth, itemHeight)
+                        elseif item.SetHeight then item:SetHeight(itemHeight) end
+                    end
+                end
+                local layout = TBU.SettingsLayout
+                if layout and layout.StackRows then
+                    layout:StackRows(body, navigationItems, {
+                        padding=itemInset,
+                        gap=tonumber(options.navigationItemGap)
+                            or paneStyle.navigationItemGap or 6,
+                    })
+                end
+            end
+            function pane:LayoutNavigationItems(items)
+                if type(items) ~= "table" then return end
+                navigationItems = items
+                lastNavigationWidth = nil
+                FitNavigationItems()
+            end
+            body:HookScript("OnSizeChanged", FitNavigationItems)
+        end
         if headerRegion then
             local headerLabel, headerNote
             local autoSizeHeader = options.headerAutoSize ~= false or isNavigationPane
@@ -289,7 +401,6 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
     content:SetScript("OnMouseDown", function() Host:BringToFront(root) end)
     root:HookScript("OnMouseDown", function() Host:BringToFront(root) end)
 
-    local hovering, dragging, resizing = false, false, false
     local resizeGrip
     local highlight = {}
     for _, side in ipairs({ "TOP", "BOTTOM", "LEFT", "RIGHT" }) do
@@ -379,6 +490,7 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
         resizing = false
         -- The cursor can leave the frame or the window can be hidden mid-drag.
         root:SetScript("OnUpdate", nil)
+        SnapWindowRectangle(root)
         SaveSize()
         SavePosition()
         Repaint()
@@ -388,6 +500,7 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
     local function EndDrag()
         if dragging then
             root:StopMovingOrSizing()
+            SnapWindowRectangle(root)
             dragging = false
             SavePosition()
         end
@@ -404,6 +517,7 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
     local function BeginDrag(_, button)
         if button ~= "LeftButton" or resizing then return end
         Host:BringToFront(root)
+        SnapWindowRectangle(root)
         dragging = true
         root:StartMoving()
         Repaint()
@@ -546,19 +660,22 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
         resizing = true
         local fromTopLeft = root.titlePosition == "bottom"
         -- Pin the corner opposite the grip; SetWidth/SetHeight then change
-        -- only the dragged sides. WoW cursor values are physical pixels.
+        -- only the dragged sides. Keep the starting frame geometry unchanged;
+        -- quantize cursor movement so one physical cursor pixel changes the
+        -- dragged edge by one physical pixel, even after a UI-scale change.
         root:ClearAllPoints()
         if fromTopLeft then
-            root:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", right - parentRight, bottomPos - parentBottom)
+            root:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT",
+                right - parentRight, bottomPos - parentBottom)
         else
-            root:SetPoint("TOPLEFT", UIParent, "TOPLEFT", left - parentLeft, topPos - parentTop)
+            root:SetPoint("TOPLEFT", UIParent, "TOPLEFT",
+                left - parentLeft, topPos - parentTop)
         end
         local startWidth, startHeight = root:GetWidth(), root:GetHeight()
         local startX, startY = cursorX, cursorY
         local maxWidth = fromTopLeft and (right - parentLeft - 10) or (parentRight - left - 10)
         local maxHeight = fromTopLeft and (parentTop - bottomPos - 10) or (topPos - parentBottom - 10)
-        local scale = root:GetEffectiveScale()
-        if not scale or scale <= 0 then scale = 1 end
+        local scale = EffectiveScale(root)
         root:SetScript("OnUpdate", function()
             -- MouseUp can land outside the grip. Never leave a permanent
             -- OnUpdate running after the user releases the drag.
@@ -569,8 +686,10 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
             local x, y = GetCursorPosition()
             if not x or not y then return end
             local sign = fromTopLeft and -1 or 1
-            local w = startWidth + sign * (x - startX) / scale
-            local h = startHeight + (fromTopLeft and 1 or -1) * (y - startY) / scale
+            local deltaWidth = SnapToPixel((x - startX) / scale, scale)
+            local deltaHeight = SnapToPixel((y - startY) / scale, scale)
+            local w = startWidth + sign * deltaWidth
+            local h = startHeight + (fromTopLeft and 1 or -1) * deltaHeight
             w = math.max(math.min(root.minimumWidth, maxWidth), math.min(maxWidth, w))
             h = math.max(math.min(root.minimumHeight, maxHeight), math.min(maxHeight, h))
             root:SetExpandedSize(w, h)

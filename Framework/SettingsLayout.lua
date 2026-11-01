@@ -35,24 +35,59 @@ local function CeilGrid(value, pixel)
     return math.ceil(math.max(0, value) / pixel - 0.000001) * pixel
 end
 
+local function SetAnchorsIfChanged(frame, anchors)
+    local saved = frame._tbuLayoutAnchorSpec
+    local same = saved and #saved == #anchors
+    if same then
+        for i, anchor in ipairs(anchors) do
+            local old = saved[i]
+            if old[1] ~= anchor[1] or old[2] ~= anchor[2] or old[3] ~= anchor[3]
+                or math.abs(old[4] - anchor[4]) > 0.0001
+                or math.abs(old[5] - anchor[5]) > 0.0001 then
+                same = false
+                break
+            end
+        end
+    end
+    if same then return false end
+    frame:ClearAllPoints()
+    local copy = {}
+    for i, anchor in ipairs(anchors) do
+        copy[i] = {anchor[1], anchor[2], anchor[3], anchor[4], anchor[5]}
+        frame:SetPoint(anchor[1], anchor[2], anchor[3], anchor[4], anchor[5])
+    end
+    frame._tbuLayoutAnchorSpec = copy
+    return true
+end
+
+local function SetWidthIfChanged(frame, width)
+    if frame and math.abs((frame:GetWidth() or 0) - width) > 0.0001 then frame:SetWidth(width) end
+end
+
+local function SetHeightIfChanged(frame, height)
+    if frame and math.abs((frame:GetHeight() or 0) - height) > 0.0001 then frame:SetHeight(height) end
+end
+
 
 -- Shared Settings geometry. Ordinary Settings UI must consume these values
 -- instead of inventing section-local padding, gaps, or header spacing.
 L.Metrics = {
-    SECTION_PADDING = 8,
-    SECTION_GAP = 8,
+    SECTION_PADDING = 5,
+    SECTION_GAP = 2,
+    PAGE_SECTION_GAP = 6,
+    CONTENT_GAP = 2,
     SECTION_BODY_GAP = 14,
     SECTION_BOTTOM_PADDING = 14,
-    ROW_GAP = DEFAULT_GAP,
-    -- Reserve a standard shared control slot in every Row, even an empty Row.
-    -- Its minimum fits the standard labelled slider; compact text/button rows
-    -- may opt into a smaller minimum. Padding is counted once during measurement.
-    ROW_MIN_HEIGHT = 40,
+    ROW_GAP = 2,
+    COLUMN_GAP = 4,
+    -- Rows grow from their measured content. Consumers may request an explicit
+    -- minimum for deliberate alignment, but ordinary controls add no empty slot.
+    ROW_MIN_HEIGHT = 1,
     ROW_VERTICAL_PADDING = 1,
     -- Host-region inset is separate from the internal Row breathing room.
     ROW_REGION_INSET_Y = 2,
     SECTION_HEADER_HEIGHT = 30,
-    DESCRIPTION_GAP = 7,
+    DESCRIPTION_GAP = 2,
     CONTENT_HEADER_HEIGHT = 20,
     CONTENT_BOTTOM_PADDING = 10,
     -- Shared native-slider geometry; label region matches dropdown Content.
@@ -309,42 +344,53 @@ function L:Note(section, text, opts)
         TBU.WindowStyles:RegisterVisual(note, repaintNote)
         repaintNote(note)
     end
-    RegisterChild(section, note, { role = "note", gapBefore = opts.gapBefore or L.Metrics.DESCRIPTION_GAP, flow = true })
+    local gapBefore = opts.gapBefore
+    if gapBefore == nil then gapBefore = L.Metrics.CONTENT_GAP end
+    RegisterChild(section, note, { role = "note", gapBefore = gapBefore, flow = true })
     return note
 end
 
 function L:ReflowSection(section)
     if not section or not section.layoutChildren then return 1 end
     local pad = section.layoutPadding or L.Metrics.SECTION_PADDING
+    local sectionGap = section.layoutGap or L.Metrics.SECTION_GAP
     local previous
     local total = pad
 
     for _, child in ipairs(section.layoutChildren) do
         if child.layoutParticipatesInFlow and child:IsShown() then
             if child.layoutKind == "section" then
-                child:SetWidth(math.max(1, section:GetWidth() - (pad * 2)))
+                SetWidthIfChanged(child, math.max(1, section:GetWidth() - (pad * 2)))
                 self:ReflowSection(child)
             elseif child.layoutKind == "row" then
                 self:LayoutRow(child, math.max(1, section:GetWidth() - (pad * 2)))
             end
-            child:ClearAllPoints()
-            local gap = previous and (child.layoutGapBefore or section.layoutGap or 0) or 0
+            local gap = previous and (child.layoutGapBefore or sectionGap) or 0
+            local anchors
             if previous then
                 local xInset = (previous.layoutRole == "main-header") and (pad - 1) or 0
-                child:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", xInset, -gap)
-                child:SetPoint("RIGHT", section, "RIGHT", -pad, 0)
+                anchors = {
+                    {"TOPLEFT", previous, "BOTTOMLEFT", xInset, -gap},
+                    {"RIGHT", section, "RIGHT", -pad, 0},
+                }
                 total = total + gap
             else
                 -- Main headers span the section border; ordinary flow content
                 -- uses the shared section inset.
                 if child.layoutRole == "main-header" then
-                    child:SetPoint("TOPLEFT", section, "TOPLEFT", 1, -1)
-                    child:SetPoint("RIGHT", section, "RIGHT", -1, 0)
+                    anchors = {
+                        {"TOPLEFT", section, "TOPLEFT", 1, -1},
+                        {"RIGHT", section, "RIGHT", -1, 0},
+                    }
                 else
-                    child:SetPoint("TOPLEFT", section, "TOPLEFT", pad, -pad)
-                    child:SetPoint("RIGHT", section, "RIGHT", -pad, 0)
+                    anchors = {
+                        {"TOPLEFT", section, "TOPLEFT", pad, -pad},
+                        {"RIGHT", section, "RIGHT", -pad, 0},
+                    }
                 end
             end
+
+            SetAnchorsIfChanged(child, anchors)
 
             local h = (child.GetHeight and child:GetHeight()) or 0
             if child.GetObjectType and child:GetObjectType() == "FontString" then
@@ -356,7 +402,10 @@ function L:ReflowSection(section)
         end
     end
 
-    section:SetHeight(math.max(1, total + pad))
+    -- Round the measured outer rectangle upward on the physical-pixel grid.
+    -- Each child height and gap above uses that same grid, so dynamic growth
+    -- cannot leave the section's bottom edge between screen pixels.
+    SetHeightIfChanged(section, math.max(1, total + pad))
     return section:GetHeight()
 end
 
@@ -408,7 +457,10 @@ end
 
 function L:Row(parent, id, opts)
     opts = opts or {}
-    local row = Node(parent, "row", id, opts)
+    local rowOptions = {}
+    for key, value in pairs(opts) do rowOptions[key] = value end
+    if rowOptions.gap == nil then rowOptions.gap = L.Metrics.ROW_GAP end
+    local row = Node(parent, "row", id, rowOptions)
     -- Rows control vertical alignment inside their parent allocation.
     row.layoutAlign = NormalizeVerticalAlign(opts.align)
     -- Control rows keep the established shared height unless a consumer opts
@@ -423,7 +475,17 @@ end
 function L:Columns(row, count, ids, opts)
     opts = opts or {}
     count = math.max(1, tonumber(count) or 1)
-    local gap = opts.gap or row.layoutGap or DEFAULT_GAP
+    -- `gap` remains a compatibility shorthand for callers that historically
+    -- used one value for both directions. New callers can tune the horizontal
+    -- column gap and vertical content gap independently.
+    local legacyGap = opts.gap
+    local contentGap = opts.contentGap
+    if contentGap == nil then contentGap = legacyGap end
+    if contentGap == nil then contentGap = L.Metrics.CONTENT_GAP end
+    local columnGap = opts.columnGap
+    if columnGap == nil then columnGap = legacyGap end
+    if columnGap == nil then columnGap = row.layoutColumnGap end
+    if columnGap == nil then columnGap = L.Metrics.COLUMN_GAP end
     local cols = {}
     for i=1,count do
         local id = ids and ids[i] or ("column"..i)
@@ -431,13 +493,13 @@ function L:Columns(row, count, ids, opts)
         if type(opts.alignments) == "table" and opts.alignments[i] then
             columnAlign = opts.alignments[i]
         end
-        cols[i] = Node(row, "column", id, { gap=gap, padding=0 })
+        cols[i] = Node(row, "column", id, { gap=contentGap, padding=0 })
         -- Columns control horizontal alignment of their content.
         cols[i].layoutAlign = NormalizeHorizontalAlign(columnAlign)
     end
     row.layoutColumns = cols
     row.layoutColumnCount = count
-    row.layoutColumnGap = gap
+    row.layoutColumnGap = columnGap
 
     -- Optional per-row column weights. Equal columns remain the default.
     -- Width policy belongs to the Row; child Content never chooses its Column width.
@@ -454,7 +516,7 @@ function L:Columns(row, count, ids, opts)
     function row:LayoutColumns(width)
         width = tonumber(width) or self:GetWidth() or 1
         local pixel = LayoutPixel(self)
-        local snappedGap = CeilGrid(gap, pixel)
+        local snappedGap = CeilGrid(columnGap, pixel)
         local usable = FloorGrid(math.max(pixel, width - snappedGap * (count - 1)), pixel)
         local x = 0
         local used = 0
@@ -464,10 +526,9 @@ function L:Columns(row, count, ids, opts)
             local endWidth = FloorGrid(usable * (used + weights[i]) / totalWeight, pixel)
             local startWidth = FloorGrid(usable * used / totalWeight, pixel)
             local columnWidth = math.max(pixel, endWidth - startWidth)
-            col:ClearAllPoints()
-            col:SetWidth(columnWidth)
-            col:SetHeight(math.max(1, col:GetHeight() or 1))
-            col:SetPoint("TOPLEFT", self, "TOPLEFT", x, 0)
+            SetWidthIfChanged(col, columnWidth)
+            SetHeightIfChanged(col, math.max(1, col:GetHeight() or 1))
+            SetAnchorsIfChanged(col, {{"TOPLEFT", self, "TOPLEFT", x, 0}})
             x = x + columnWidth + snappedGap
             used = used + weights[i]
         end
@@ -492,13 +553,20 @@ end
 -- Sections are borderless presentation by default, but remain fully measured.
 function L:SectionPair(parent, id, leftId, rightId, opts)
     opts = opts or {}
-    local row = self:Row(parent, id, { flow=true, gap=opts.columnGap or 12 })
+    local columnGap = opts.columnGap
+    if columnGap == nil then columnGap = L.Metrics.COLUMN_GAP end
+    local contentGap = opts.contentGap
+    if contentGap == nil then contentGap = opts.columnGap or L.Metrics.CONTENT_GAP end
+    local rowGap = opts.rowGap
+    if rowGap == nil then rowGap = opts.columnGap or L.Metrics.ROW_GAP end
+    local row = self:Row(parent, id, { flow=true, gap=rowGap })
     self:SetFlowChild(parent, row, "row")
     local columns = self:Columns(row, 2, {leftId .. "-host", rightId .. "-host"},
-        { gap=opts.columnGap or 12 })
+        { columnGap=columnGap, contentGap=contentGap })
     local sectionOpts = {
         flow=true, border=opts.border == true,
-        padding=opts.padding or 3, gap=opts.gap or 4,
+        padding=opts.padding == nil and L.Metrics.SECTION_PADDING or opts.padding,
+        gap=opts.gap == nil and L.Metrics.SECTION_GAP or opts.gap,
     }
     local left = self:Section(columns[1], leftId, sectionOpts)
     local right = self:Section(columns[2], rightId, sectionOpts)
@@ -556,8 +624,9 @@ function L:LayoutRow(row, width)
     end
 
     width = math.max(1, tonumber(width) or row:GetWidth() or 1)
-    width = math.max(LayoutPixel(row), FloorGrid(width, LayoutPixel(row)))
-    row:SetWidth(width)
+    local pixel = LayoutPixel(row)
+    width = math.max(pixel, FloorGrid(width, pixel))
+    SetWidthIfChanged(row, width)
     row:LayoutColumns(width)
 
     -- Recursive layout contract:
@@ -578,36 +647,44 @@ function L:LayoutRow(row, width)
                 -- Content in a Column and silently break standard alignment.
                 local gap = previous and (child.layoutGapBefore or col.layoutGap or L.Metrics.ROW_GAP) or 0
                 totalHeight = totalHeight + math.max(0, gap)
-                child:ClearAllPoints()
-
+                local anchors
                 if child.layoutKind == "section" then
-                    child:SetWidth(columnWidth)
-                    child:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -totalHeight)
-                    child:SetPoint("RIGHT", col, "RIGHT", 0, 0)
+                    SetWidthIfChanged(child, columnWidth)
+                    anchors = {
+                        {"TOPLEFT", col, "TOPLEFT", 0, -totalHeight},
+                        {"RIGHT", col, "RIGHT", 0, 0},
+                    }
+                    SetAnchorsIfChanged(child, anchors)
                     self:ReflowSection(child)
                 elseif child.layoutKind == "row" then
-                    child:SetWidth(columnWidth)
-                    child:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -totalHeight)
+                    SetWidthIfChanged(child, columnWidth)
+                    anchors = {{"TOPLEFT", col, "TOPLEFT", 0, -totalHeight}}
+                    SetAnchorsIfChanged(child, anchors)
                     self:LayoutRow(child, columnWidth)
                 else
                     if child.layoutWrap and child.GetObjectType and child:GetObjectType() == "FontString" then
-                        child:SetWidth(columnWidth)
+                        SetWidthIfChanged(child, columnWidth)
                         child:SetWordWrap(true)
                         child:SetNonSpaceWrap(true)
                     elseif child.layoutFillWidth then
-                        child:SetWidth(math.min(columnWidth, child.layoutMaxWidth or columnWidth))
+                        local fillWidth = math.min(columnWidth, child.layoutMaxWidth or columnWidth)
+                        SetWidthIfChanged(child, fillWidth)
+                    elseif child.SetWidth and child.GetWidth then
+                        SetWidthIfChanged(child, child:GetWidth() or columnWidth)
                     end
                     local anchor = self:GetColumnHorizontalAnchor(col)
                     if child.layoutFillWidth or anchor == "LEFT" then
-                        child:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -totalHeight)
+                        anchors = {{"TOPLEFT", col, "TOPLEFT", 0, -totalHeight}}
                     elseif anchor == "RIGHT" then
-                        child:SetPoint("TOPRIGHT", col, "TOPRIGHT", 0, -totalHeight)
+                        anchors = {{"TOPRIGHT", col, "TOPRIGHT", 0, -totalHeight}}
                     else
-                        child:SetPoint("TOP", col, "TOP", 0, -totalHeight)
+                        anchors = {{"TOP", col, "TOP", 0, -totalHeight}}
                     end
+                    SetAnchorsIfChanged(child, anchors)
                 end
 
-                totalHeight = totalHeight + self:MeasureContent(child)
+                local childHeight = self:MeasureContent(child)
+                totalHeight = totalHeight + childHeight
                 previous = child
             end
         end
@@ -615,8 +692,8 @@ function L:LayoutRow(row, width)
         -- Every layout pass owns the current measurement, including an empty
         -- Column. Never retain a previous Content height after its children stop
         -- participating in flow; the structural Column remains, but measures empty.
-        col.layoutContentHeight = totalHeight
-        col:SetHeight(math.max(1, totalHeight))
+        col.layoutContentHeight = math.max(1, totalHeight)
+        SetHeightIfChanged(col, col.layoutContentHeight)
     end
 
     self:MeasureRow(row)
@@ -631,8 +708,7 @@ function L:LayoutRow(row, width)
         local contentHeight = col.layoutContentHeight or 0
         local remaining = math.max(0, rowHeight - contentHeight)
         local offsetY = anchor == "BOTTOM" and remaining or (anchor == "CENTER" and remaining / 2 or 0)
-        col:ClearAllPoints()
-        col:SetPoint("TOPLEFT", row, "TOPLEFT", columnX, -offsetY)
+        SetAnchorsIfChanged(col, {{"TOPLEFT", row, "TOPLEFT", columnX, -offsetY}})
         columnX = columnX + (col:GetWidth() or 0) + (row.layoutColumnGap or 0)
     end
     return rowHeight
@@ -655,36 +731,36 @@ function L:FlowPageSections(page, sections, opts)
         local left = math.max(0, tonumber(opts.left) or 0)
         local right = math.max(0, tonumber(opts.right) or 0)
         local top = math.max(0, tonumber(opts.top) or 0)
-        local columnGap = math.max(0, tonumber(opts.columnGap) or 12)
-        local rowGap = math.max(0, tonumber(opts.rowGap) or L.Metrics.SECTION_GAP)
+        local columnGap = math.max(0, tonumber(opts.columnGap) or L.Metrics.PAGE_SECTION_GAP)
+        local rowGap = math.max(0, tonumber(opts.rowGap) or L.Metrics.PAGE_SECTION_GAP)
         local available = math.max(1, width - left - right)
         local x, y, rowHeight = 0, top, 0
         for _, section in ipairs(sections or {}) do
             if section:IsShown() then
                 local naturalWidth = math.max(1, tonumber(section.layoutPreferredWidth) or available)
                 local sectionWidth = math.min(naturalWidth, available)
-                section:SetWidth(sectionWidth)
+                SetWidthIfChanged(section, sectionWidth)
                 self:ReflowSection(section)
                 local sectionHeight = math.max(1, section:GetHeight() or 1)
                 if x > 0 and x + sectionWidth > available then
                     x, y, rowHeight = 0, y + rowHeight + rowGap, 0
                 end
-                section:ClearAllPoints()
-                section:SetPoint("TOPLEFT", page, "TOPLEFT", left + x, -y)
+                SetAnchorsIfChanged(section, {{"TOPLEFT", page, "TOPLEFT", left + x, -y}})
                 x = x + sectionWidth + columnGap
                 rowHeight = math.max(rowHeight, sectionHeight)
             else
-                section:ClearAllPoints()
+                if section:GetNumPoints() > 0 then section:ClearAllPoints() end
+                section._tbuLayoutAnchorSpec = nil
             end
         end
         local totalHeight = y + rowHeight
-        page:SetHeight(math.max(1, totalHeight))
+        SetHeightIfChanged(page, math.max(1, totalHeight))
         return totalHeight
     end
     local pixel = LayoutPixel(page)
     local preferred = math.max(pixel, FloorGrid(math.max(100, tonumber(opts.sectionWidth) or 590), pixel))
-    local columnGap = CeilGrid(math.max(0, tonumber(opts.columnGap) or 12), pixel)
-    local rowGap = CeilGrid(math.max(0, tonumber(opts.rowGap) or L.Metrics.SECTION_GAP), pixel)
+    local columnGap = CeilGrid(math.max(0, tonumber(opts.columnGap) or L.Metrics.PAGE_SECTION_GAP), pixel)
+    local rowGap = CeilGrid(math.max(0, tonumber(opts.rowGap) or L.Metrics.PAGE_SECTION_GAP), pixel)
     local left = CeilGrid(math.max(0, tonumber(opts.left) or 0), pixel)
     local right = CeilGrid(math.max(0, tonumber(opts.right) or 0), pixel)
     local top = CeilGrid(math.max(0, tonumber(opts.top) or 0), pixel)
@@ -718,10 +794,10 @@ function L:FlowPageSections(page, sections, opts)
 
     for _, section in ipairs(sections or {}) do
         if section:IsShown() then
-            section:SetWidth(sectionWidth)
+            SetWidthIfChanged(section, sectionWidth)
             self:ReflowSection(section)
             local height = math.max(pixel, CeilGrid(tonumber(section:GetHeight()) or 1, pixel))
-            section:SetHeight(height)
+            SetHeightIfChanged(section, height)
             if not hasBand then
                 hasBand = true
                 bandHeight = height
@@ -739,16 +815,16 @@ function L:FlowPageSections(page, sections, opts)
             end
             local x = left + (column - 1) * (sectionWidth + columnGap)
             local y = bandTop + (columnUsed > 0 and columnUsed + rowGap or 0)
-            section:ClearAllPoints()
-            section:SetPoint("TOPLEFT", page, "TOPLEFT", x, -y)
+            SetAnchorsIfChanged(section, {{"TOPLEFT", page, "TOPLEFT", x, -y}})
             columnUsed = (columnUsed > 0 and columnUsed + rowGap or 0) + height
         else
-            section:ClearAllPoints()
+            if section:GetNumPoints() > 0 then section:ClearAllPoints() end
+            section._tbuLayoutAnchorSpec = nil
         end
     end
 
     local contentHeight = hasBand and (bandTop + bandHeight) or top
-    page:SetHeight(math.max(1, contentHeight))
+    SetHeightIfChanged(page, math.max(1, contentHeight))
     return contentHeight
 end
 
@@ -792,10 +868,10 @@ end
 function L:ReflowPage(page, rows, opts)
     opts = opts or {}
     local width = math.max(1, tonumber(opts.width) or page:GetWidth() or 1)
-    page:SetWidth(width)
+    SetWidthIfChanged(page, width)
 
     for _, row in ipairs(rows or {}) do
-        row:SetWidth(width)
+        SetWidthIfChanged(row, width)
         row:LayoutColumns(width)
         local section = row.layoutSection
         local column = row.layoutSectionColumn
@@ -803,13 +879,16 @@ function L:ReflowPage(page, rows, opts)
         -- This keeps hidden Sections out of stacking and scroll measurements.
         if section then row:SetShown(section:IsShown()) end
         if section and column and row:IsShown() then
-            column:SetWidth(width)
-            section:ClearAllPoints()
-            section:SetPoint("TOPLEFT", column, "TOPLEFT", 0, 0)
-            section:SetPoint("RIGHT", column, "RIGHT", 0, 0)
+            SetWidthIfChanged(column, width)
+            local sectionAnchors = {
+                {"TOPLEFT", column, "TOPLEFT", 0, 0},
+                {"RIGHT", column, "RIGHT", 0, 0},
+            }
+            SetAnchorsIfChanged(section, sectionAnchors)
+            self:ReflowSection(section)
             local height = math.max(1, section:GetHeight() or 1)
-            column:SetHeight(height)
-            row:SetHeight(height)
+            SetHeightIfChanged(column, height)
+            SetHeightIfChanged(row, height)
         end
     end
 
@@ -821,7 +900,7 @@ end
 
 function L:SetContentHeight(node, height)
     node.layoutContentHeight = math.max(0, tonumber(height) or 0)
-    node:SetHeight(math.max(1, node.layoutContentHeight))
+    SetHeightIfChanged(node, math.max(1, node.layoutContentHeight))
 end
 
 function L:MeasureRow(row, bottomPadding)
@@ -832,9 +911,9 @@ function L:MeasureRow(row, bottomPadding)
         end
     end
     -- Vertical breathing room is a Row rule, not a Content-type rule.
-    -- Empty Rows also retain the standard slot, so peers do not collapse.
+    -- Rows otherwise grow from measured content instead of reserving a tall slot.
     local natural = tallest + (2 * L.Metrics.ROW_VERTICAL_PADDING) + (bottomPadding or 0)
-    row:SetHeight(math.max(row.layoutMinHeight or L.Metrics.ROW_MIN_HEIGHT, natural))
+    SetHeightIfChanged(row, math.max(row.layoutMinHeight or L.Metrics.ROW_MIN_HEIGHT, natural))
     return row:GetHeight()
 end
 
@@ -852,9 +931,8 @@ function L:LayoutRowInRegion(row, region, opts)
     self:LayoutRow(row, width)
     local height = math.max(tonumber(opts.minHeight) or 1, row:GetHeight() + (2 * insetY))
     -- OnSizeChanged may trigger the sizing pass again. Only write changed height.
-    if math.abs(region:GetHeight() - height) > 0.5 then region:SetHeight(height) end
-    row:ClearAllPoints()
-    row:SetPoint("TOPLEFT", region, "TOPLEFT", insetX, -insetY)
+    SetHeightIfChanged(region, height)
+    SetAnchorsIfChanged(row, {{"TOPLEFT", region, "TOPLEFT", insetX, -insetY}})
     return height
 end
 
@@ -867,19 +945,23 @@ function L:StackRows(box, rows, opts)
     local total = pad
     for _,row in ipairs(rows) do
       if row:IsShown() then
-        row:ClearAllPoints()
         if previous then
-            row:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", 0, -gap)
+            SetAnchorsIfChanged(row, {
+                {"TOPLEFT", previous, "BOTTOMLEFT", 0, -gap},
+                {"RIGHT", box, "RIGHT", -pad, 0},
+            })
             total = total + gap
         else
-            row:SetPoint("TOPLEFT", box, "TOPLEFT", pad, -pad)
+            SetAnchorsIfChanged(row, {
+                {"TOPLEFT", box, "TOPLEFT", pad, -pad},
+                {"RIGHT", box, "RIGHT", -pad, 0},
+            })
         end
-        row:SetPoint("RIGHT", box, "RIGHT", -pad, 0)
         total = total + (row:GetHeight() or 0)
         previous = row
       end
     end
-    box:SetHeight(math.max(1, total + pad))
+    SetHeightIfChanged(box, math.max(1, total + pad))
     return box:GetHeight()
 end
 
@@ -906,8 +988,7 @@ end
 function L:PlaceSectionAfter(section, previous, gap, leftOffset)
     gap = gap or DEFAULT_GAP
     leftOffset = leftOffset or 0
-    section:ClearAllPoints()
-    section:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", leftOffset, -gap)
+    SetAnchorsIfChanged(section, {{"TOPLEFT", previous, "BOTTOMLEFT", leftOffset, -gap}})
 end
 
 -- A named structure can be inspected/addressed without relying on coordinates.
@@ -928,15 +1009,17 @@ function L:StackSections(parent, sections, opts)
     local total = top
     local count = 0
     for _, section in ipairs(sections or {}) do
-        section:ClearAllPoints()
-        section:SetPoint("LEFT", parent, "LEFT", left, 0)
-        section:SetPoint("RIGHT", parent, "RIGHT", -right, 0)
+        local anchors = {
+            {"LEFT", parent, "LEFT", left, 0},
+            {"RIGHT", parent, "RIGHT", -right, 0},
+        }
         if previous then
-            section:SetPoint("TOP", previous, "BOTTOM", 0, -gap)
+            anchors[#anchors + 1] = {"TOP", previous, "BOTTOM", 0, -gap}
             total = total + gap
         else
-            section:SetPoint("TOP", parent, "TOP", 0, -top)
+            anchors[#anchors + 1] = {"TOP", parent, "TOP", 0, -top}
         end
+        SetAnchorsIfChanged(section, anchors)
         total = total + (section:GetHeight() or 0)
         count = count + 1
         previous = section
@@ -945,6 +1028,5 @@ function L:StackSections(parent, sections, opts)
 end
 
 function L:PlaceInColumn(frame, column, x, y)
-    frame:ClearAllPoints()
-    frame:SetPoint("TOPLEFT", column, "TOPLEFT", x or 0, -(y or 0))
+    SetAnchorsIfChanged(frame, {{"TOPLEFT", column, "TOPLEFT", x or 0, -(y or 0)}})
 end

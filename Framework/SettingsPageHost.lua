@@ -10,6 +10,16 @@ TBU.SettingsPageHost = PageHost
 
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 
+local function EnableNativePixelRounding(frame)
+    local pixelUtil = _G.PixelUtil
+    local roundRecursively = pixelUtil and pixelUtil.SetRoundLayoutToNearestPixelRecursively
+    if type(roundRecursively) == "function" then
+        roundRecursively(frame, true)
+        return true
+    end
+    return false
+end
+
 local function CreateScroll(parent, topOffset, bottomInset, withScrollbar, themeMode, leftInset)
     local scroll = CreateFrame("ScrollFrame", nil, parent)
     scroll:EnableMouseWheel(true)
@@ -107,6 +117,19 @@ end
 
 function PageHost:BindSections(host, definitions, opts)
     opts = opts or {}
+    local style = TBU.WindowStyles and TBU.WindowStyles:GetForFrame(host.panel) or {}
+    local sectionWidth = opts.sectionWidth
+    if sectionWidth == nil then sectionWidth = style.contentSectionWidth end
+    local columnGap = opts.columnGap
+    if columnGap == nil then columnGap = style.sectionColumnGap end
+    local contentLeftPadding = opts.contentLeftPadding
+    if contentLeftPadding == nil then contentLeftPadding = style.sectionCanvasLeft end
+    local contentRightPadding = opts.contentRightPadding
+    if contentRightPadding == nil then contentRightPadding = style.sectionCanvasRight end
+    local contentTopPadding = opts.contentTopPadding
+    if contentTopPadding == nil then contentTopPadding = style.sectionCanvasTop end
+    local contentBottomPadding = opts.contentBottomPadding
+    if contentBottomPadding == nil then contentBottomPadding = style.sectionCanvasBottom end
     local sections, rows = {}, {}
     local wrapSections = opts.wrapSections == true
     for index, definition in ipairs(definitions or {}) do
@@ -120,6 +143,12 @@ function PageHost:BindSections(host, definitions, opts)
         end
     end
     host.sections, host.rows = sections, rows
+    -- Use the Retail client's native layout rounding for each complete page
+    -- Section, including its control frames and border/background textures.
+    -- Guard the newer API so other client profiles retain their prior behavior.
+    for _, section in ipairs(sections) do
+        EnableNativePixelRounding(section)
+    end
     local dropdowns = {}
     for _, section in ipairs(sections) do GatherDropdowns(section, dropdowns) end
     local function Measure()
@@ -141,14 +170,14 @@ function PageHost:BindSections(host, definitions, opts)
             -- The native Blizzard host continues through ReflowPage below.
             local height = TBU.SettingsLayout:FlowPageSections(host.layout, sections, {
                 width=width,
-                sectionWidth=opts.sectionWidth,
-                columnGap=opts.columnGap,
+                sectionWidth=sectionWidth,
+                columnGap=columnGap,
                 rowGap=opts.rowGap,
-                left=opts.contentLeftPadding,
-                right=opts.contentRightPadding,
-                top=opts.contentTopPadding,
+                left=contentLeftPadding,
+                right=contentRightPadding,
+                top=contentTopPadding,
             })
-            local bottomPad = math.max(0, tonumber(opts.contentBottomPadding) or 18)
+            local bottomPad = math.max(0, tonumber(contentBottomPadding) or 18)
             host.content:SetHeight(PopupAwareContentHeight(host, dropdowns, height, bottomPad))
             host.scrollbar:RefreshVisibility()
             TBU.SettingsLayout:DisableTextureSnapping(host.panel)
