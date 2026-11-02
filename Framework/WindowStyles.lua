@@ -329,7 +329,7 @@ function Styles:CreateFlatTexture(parent, layer, color)
     return texture
 end
 
-function Styles:CreateButton(parent, label, width, onClick, presetName)
+function Styles:CreateButton(parent, label, width, onClick, presetName, labelOptions)
     local button = TBU.Compatibility:CreateBackdropFrame("Button", parent)
     button:SetSize(math.max(1, tonumber(width) or 170), 23)
     local style = self:Get(presetName)
@@ -338,6 +338,45 @@ function Styles:CreateButton(parent, label, width, onClick, presetName)
     text:SetText(label)
     text:SetTextColor(unpack(style.text))
     button.label = text
+    button.labelOptions = type(labelOptions) == "table" and labelOptions or {}
+    button.labelOptions.wrap = button.labelOptions.wrap == true
+    button.labelOptions.autoHeight = button.labelOptions.autoHeight == true
+    button.labelOptions.horizontalPadding = math.max(0,
+        tonumber(button.labelOptions.horizontalPadding) or 8)
+    button.labelOptions.verticalPadding = math.max(0,
+        tonumber(button.labelOptions.verticalPadding) or 4)
+    button.labelOptions.minHeight = math.max(1,
+        tonumber(button.labelOptions.minHeight) or button:GetHeight())
+    if button.labelOptions.wrap then
+        text:ClearAllPoints()
+        text:SetPoint("TOPLEFT", button, "TOPLEFT",
+            button.labelOptions.horizontalPadding, -button.labelOptions.verticalPadding)
+        text:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT",
+            -button.labelOptions.horizontalPadding, button.labelOptions.verticalPadding)
+        text:SetJustifyH("CENTER")
+        text:SetJustifyV("MIDDLE")
+        text:SetWordWrap(true)
+        if text.SetNonSpaceWrap then text:SetNonSpaceWrap(true) end
+    end
+    function button:UpdateLabelGeometry()
+        local opts = self.labelOptions
+        if not opts or not opts.autoHeight or not self.label then return end
+        local buttonWidth = self:GetWidth() or 0
+        if buttonWidth <= 1 then return end
+        local width = math.max(1, buttonWidth - 2 * opts.horizontalPadding)
+        self.label:SetWidth(width)
+        local textHeight = math.max(1, math.ceil(self.label:GetStringHeight() or 1))
+        local height = math.max(opts.minHeight, textHeight + 2 * opts.verticalPadding)
+        if math.abs((self:GetHeight() or 0) - height) > 0.0001 then
+            self:SetHeight(height)
+        end
+    end
+    if button.labelOptions.wrap or button.labelOptions.autoHeight then
+        button:HookScript("OnSizeChanged", function(self)
+            self:UpdateLabelGeometry()
+        end)
+        button:UpdateLabelGeometry()
+    end
     button.tbuPressed = false
     button.tbuSelected = false
     self:ApplyButton(button, false, presetName)

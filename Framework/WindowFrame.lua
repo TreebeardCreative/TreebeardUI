@@ -70,7 +70,11 @@ function Host:BringToFront(window)
         end
         if frame.closeButton then frame.closeButton:SetFrameLevel(base + 22) end
         if frame.collapseButton then frame.collapseButton:SetFrameLevel(base + 22) end
-        if frame.resizeGrip then frame.resizeGrip:SetFrameLevel(base + 18) end
+        if frame.resizeGrips then
+            for _, grip in ipairs(frame.resizeGrips) do grip:SetFrameLevel(base + 18) end
+        elseif frame.resizeGrip then
+            frame.resizeGrip:SetFrameLevel(base + 18)
+        end
         if frame.OnWindowLevelChanged then frame:OnWindowLevelChanged(base) end
     end
 end
@@ -85,7 +89,8 @@ local function CharacterWindowState(owner)
     return state
 end
 
-function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, minHeight, owner)
+function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, minHeight, owner, options)
+    options = options or {}
     local preset = nil -- use live per-owner preset for window chrome
     local style = Styles:Get(Styles:GetConsumerPreset(owner))
     local root = TBU.Compatibility:CreateBackdropFrame("Frame", UIParent)
@@ -324,7 +329,10 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
                 local itemWidth = math.max(1, width - (2 * itemInset))
                 for _, item in ipairs(navigationItems) do
                     if item then
-                        if item.SetSize then item:SetSize(itemWidth, itemHeight)
+                        if item.labelOptions and item.labelOptions.autoHeight then
+                            item:SetWidth(itemWidth)
+                            item:UpdateLabelGeometry()
+                        elseif item.SetSize then item:SetSize(itemWidth, itemHeight)
                         elseif item.SetHeight then item:SetHeight(itemHeight) end
                     end
                 end
@@ -427,6 +435,8 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
     root:HookScript("OnMouseDown", function() Host:BringToFront(root) end)
 
     local resizeGrip
+    local resizeGrips = {}
+    local activeResizeGrip
     local highlight = {}
     for _, side in ipairs({ "TOP", "BOTTOM", "LEFT", "RIGHT" }) do
         local tex = Styles:CreateFlatTexture(root, "OVERLAY", Styles:GetForFrame(root).resizeHighlight)
@@ -483,18 +493,20 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
     end
 
     local function RefreshGrip()
-        if not resizeGrip then return end
-        if root.collapsed then
-            resizeGrip:Hide()
-            return
-        end
-        -- Keep the hit target active even when the glyph is visually hidden;
-        -- otherwise a direct mouse entry into the corner cannot reveal it.
-        resizeGrip:Show()
-        if resizeGrip.icon then
-            local gold = resizeGrip:IsMouseOver() or resizing
-            resizeGrip.icon:SetVertexColor(unpack(gold and style.interactionGold or style.resizeGripIdle))
-            resizeGrip.icon:SetShown(hovering or dragging or resizing or gold)
+        for _, grip in ipairs(resizeGrips) do
+            if root.collapsed then
+                grip:Hide()
+            else
+                -- Keep each hit target active while its small glyph stays hidden
+                -- until the window or that specific grip is hovered.
+                grip:Show()
+                if grip.icon then
+                    local active = resizing and activeResizeGrip == grip
+                    local gold = grip:IsMouseOver() or active
+                    grip.icon:SetVertexColor(unpack(gold and style.interactionGold or style.resizeGripIdle))
+                    grip.icon:SetShown(hovering or dragging or active or gold)
+                end
+            end
         end
     end
     root.RefreshResizeGrip = RefreshGrip
@@ -513,6 +525,7 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
     local function EndResize()
         if not resizing then return end
         resizing = false
+        activeResizeGrip = nil
         -- The cursor can leave the frame or the window can be hidden mid-drag.
         root:SetScript("OnUpdate", nil)
         SnapWindowRectangle(root)
@@ -608,62 +621,39 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
     -- Root/content mouse events activate the window but do not initiate dragging.
     root.windowEdges = {top, bottom, left, right}
 
-    -- One shared resize interaction for both title positions. The *visible*
-    -- texture is small, but the hit box stays generous for precise mouse use.
-    -- Artwork is monochrome and tintable; no per-window grip renderer.
-    resizeGrip = CreateFrame("Frame", nil, root)
-    resizeGrip:SetSize(18, 18)
-    resizeGrip:SetFrameLevel(root:GetFrameLevel() + 18)
-    resizeGrip:EnableMouse(true)
-    local gripIcon = resizeGrip:CreateTexture(nil, "ARTWORK")
-    gripIcon:SetTexture(TBU:GetAssetPath("resize_handle.png"))
-    gripIcon:SetSize(14, 14)
-    resizeGrip.icon = gripIcon
-    local gripHovered = false
-    local function RepaintGrip()
-        -- The grey grip becomes gold only when directly hovered or dragging.
-        local color = (gripHovered or resizing) and style.interactionGold or style.resizeGripIdle
-        gripIcon:SetVertexColor(unpack(color))
-        gripIcon:SetShown(hovering or dragging or resizing or gripHovered)
-    end
-    local function PlaceGrip()
-        resizeGrip:ClearAllPoints()
-        gripIcon:ClearAllPoints()
-        if root.titlePosition == "bottom" then
-            resizeGrip:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
-            gripIcon:SetPoint("TOPLEFT", resizeGrip, "TOPLEFT", 2, -2)
-            -- Turn the lower-right motif toward the upper-left corner.
-            gripIcon:SetTexCoord(1, 0, 1, 0)
+    -- Corner and one-axis grips share the window's existing pixel-snapped
+    -- sizing, constraints, persistence, and hover feedback.
+    local function PlaceGrip(grip)
+        grip:ClearAllPoints()
+        grip.icon:ClearAllPoints()
+        local mode = grip.resizeMode
+        if mode == "corner" then
+            if root.titlePosition == "bottom" then
+                grip:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
+                grip.icon:SetPoint("TOPLEFT", grip, "TOPLEFT", 2, -2)
+                grip.icon:SetTexCoord(1, 0, 1, 0)
+            else
+                grip:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", 0, 0)
+                grip.icon:SetPoint("BOTTOMRIGHT", grip, "BOTTOMRIGHT", -2, 2)
+                grip.icon:SetTexCoord(0, 1, 0, 1)
+            end
+            grip.icon:SetRotation(0)
+        elseif mode == "left" or mode == "right" then
+            local horizontalEdge = mode == "left" and "LEFT" or "RIGHT"
+            local insetX = mode == "left" and 7 or -7
+            grip:SetPoint("CENTER", root, horizontalEdge, insetX, 0)
+            grip.icon:SetPoint("CENTER", grip, "CENTER")
         else
-            resizeGrip:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", 0, 0)
-            gripIcon:SetPoint("BOTTOMRIGHT", resizeGrip, "BOTTOMRIGHT", -2, 2)
-            gripIcon:SetTexCoord(0, 1, 0, 1)
+            local verticalEdge = mode == "top" and "TOP" or "BOTTOM"
+            local insetY = mode == "top" and -7 or 7
+            grip:SetPoint("CENTER", root, verticalEdge, 0, insetY)
+            grip.icon:SetPoint("CENTER", grip, "CENTER")
         end
-        RepaintGrip()
     end
-    root.PlaceResizeGrip = PlaceGrip
-    PlaceGrip()
-    resizeGrip:Hide()
-    resizeGrip:SetScript("OnEnter", function()
-        gripHovered = true
-        UpdateHover(true)
-        RepaintGrip()
-        if GameTooltip then
-            GameTooltip:SetOwner(resizeGrip, "ANCHOR_RIGHT")
-            GameTooltip:SetText("Resize Window")
-            GameTooltip:AddLine("Drag to resize", 0.85, 0.85, 0.87)
-            GameTooltip:AddLine("Right-click to restore default size", 0.66, 0.69, 0.72)
-            GameTooltip:Show()
-        end
-    end)
-    resizeGrip:SetScript("OnLeave", function()
-        gripHovered = false
-        RepaintGrip()
-        if GameTooltip and GameTooltip.IsOwned and GameTooltip:IsOwned(resizeGrip) then GameTooltip:Hide() end
-        if not resizing then UpdateHover(false) end
-    end)
-    resizeGrip:SetScript("OnMouseDown", function(_, button)
-        if button == "RightButton" and not root.collapsed and not dragging and not resizing then
+
+    local function BeginResize(grip, button)
+        if button == "RightButton" and grip.resizeMode == "corner"
+            and not root.collapsed and not dragging and not resizing then
             Host:BringToFront(root)
             root:SetExpandedSize(root.defaultWindowWidth, root.defaultWindowHeight)
             SaveSize()
@@ -672,8 +662,7 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
             RefreshGrip()
             return
         end
-        if button ~= "LeftButton" or root.collapsed or dragging or resizing then return end
-        if not GetCursorPosition then return end
+        if button ~= "LeftButton" or root.collapsed or dragging or resizing or not GetCursorPosition then return end
         local left, right, topPos, bottomPos = root:GetLeft(), root:GetRight(), root:GetTop(), root:GetBottom()
         local parentLeft, parentRight = UIParent:GetLeft(), UIParent:GetRight()
         local parentTop, parentBottom = UIParent:GetTop(), UIParent:GetBottom()
@@ -681,57 +670,124 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
         local cursorX, cursorY = GetCursorPosition()
         if not (cursorX and cursorY) then return end
         Host:BringToFront(root)
-        if GameTooltip and GameTooltip.IsOwned and GameTooltip:IsOwned(resizeGrip) then GameTooltip:Hide() end
+        if GameTooltip and GameTooltip.IsOwned and GameTooltip:IsOwned(grip) then GameTooltip:Hide() end
         resizing = true
-        local fromTopLeft = root.titlePosition == "bottom"
-        -- Pin the corner opposite the grip; SetWidth/SetHeight then change
-        -- only the dragged sides. Keep the starting frame geometry unchanged;
-        -- quantize cursor movement so one physical cursor pixel changes the
-        -- dragged edge by one physical pixel, even after a UI-scale change.
+        activeResizeGrip = grip
+
+        local mode = grip.resizeMode
+        local fixedPoint
+        if mode == "corner" then
+            local fromTopLeft = root.titlePosition == "bottom"
+            fixedPoint = fromTopLeft and "BOTTOMRIGHT" or "TOPLEFT"
+        elseif mode == "right" then fixedPoint = "TOPLEFT"
+        elseif mode == "left" then fixedPoint = "TOPRIGHT"
+        elseif mode == "top" then fixedPoint = "BOTTOMLEFT"
+        else fixedPoint = "TOPLEFT" end -- bottom edge
         root:ClearAllPoints()
-        if fromTopLeft then
-            root:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT",
-                right - parentRight, bottomPos - parentBottom)
+        if fixedPoint == "TOPLEFT" then
+            root:SetPoint("TOPLEFT", UIParent, "TOPLEFT", left - parentLeft, topPos - parentTop)
+        elseif fixedPoint == "TOPRIGHT" then
+            root:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", right - parentRight, topPos - parentTop)
+        elseif fixedPoint == "BOTTOMLEFT" then
+            root:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", left - parentLeft, bottomPos - parentBottom)
         else
-            root:SetPoint("TOPLEFT", UIParent, "TOPLEFT",
-                left - parentLeft, topPos - parentTop)
+            root:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", right - parentRight, bottomPos - parentBottom)
         end
+
         local startWidth, startHeight = root:GetWidth(), root:GetHeight()
         local startX, startY = cursorX, cursorY
-        local maxWidth = fromTopLeft and (right - parentLeft - 10) or (parentRight - left - 10)
-        local maxHeight = fromTopLeft and (parentTop - bottomPos - 10) or (topPos - parentBottom - 10)
         local scale = EffectiveScale(root)
+        local widthSign, heightSign = 0, 0
+        if mode == "corner" then
+            local fromTopLeft = root.titlePosition == "bottom"
+            widthSign, heightSign = fromTopLeft and -1 or 1, fromTopLeft and 1 or -1
+        elseif mode == "right" then widthSign = 1
+        elseif mode == "left" then widthSign = -1
+        elseif mode == "top" then heightSign = 1
+        else heightSign = -1 end
+
+        local maxWidth = widthSign == 0 and startWidth
+            or (widthSign > 0 and (parentRight - left - 10) or (right - parentLeft - 10))
+        local maxHeight = heightSign == 0 and startHeight
+            or (heightSign > 0 and (parentTop - bottomPos - 10) or (topPos - parentBottom - 10))
         root:SetScript("OnUpdate", function()
-            -- MouseUp can land outside the grip. Never leave a permanent
-            -- OnUpdate running after the user releases the drag.
-            if IsMouseButtonDown and not IsMouseButtonDown("LeftButton") then
-                EndResize()
-                return
-            end
+            if IsMouseButtonDown and not IsMouseButtonDown("LeftButton") then EndResize(); return end
             local x, y = GetCursorPosition()
             if not x or not y then return end
-            local sign = fromTopLeft and -1 or 1
             local deltaWidth = SnapToPixel((x - startX) / scale, scale)
             local deltaHeight = SnapToPixel((y - startY) / scale, scale)
-            local w = startWidth + sign * deltaWidth
-            local h = startHeight + (fromTopLeft and 1 or -1) * deltaHeight
+            local w = widthSign == 0 and startWidth or (startWidth + widthSign * deltaWidth)
+            local h = heightSign == 0 and startHeight or (startHeight + heightSign * deltaHeight)
             w = math.max(math.min(root.minimumWidth, maxWidth), math.min(maxWidth, w))
             h = math.max(math.min(root.minimumHeight, maxHeight), math.min(maxHeight, h))
             root:SetExpandedSize(w, h)
         end)
         Repaint()
         RefreshGrip()
-    end)
-    resizeGrip:SetScript("OnMouseUp", function(_, button)
-        if button == "LeftButton" then EndResize() end
-    end)
+    end
+
+    local function CreateResizeGrip(mode)
+        local grip = CreateFrame("Frame", nil, root)
+        grip.resizeMode = mode
+        grip:SetFrameLevel(root:GetFrameLevel() + 18)
+        grip:EnableMouse(true)
+        -- One-axis grips fit the 12-unit pane gutter; their hit area matches
+        -- the visible marker and is centered 7 units inward from the edge.
+        local gripSize = mode == "corner" and 18 or 12
+        grip:SetSize(gripSize, gripSize)
+        local icon = grip:CreateTexture(nil, "ARTWORK")
+        icon:SetTexture(TBU:GetAssetPath(mode == "corner" and "resize_handle.png" or "radio_checked.png"))
+        local iconSize = mode == "corner" and 14 or 12
+        icon:SetSize(iconSize, iconSize)
+        if mode ~= "corner" then
+            -- radio_checked.png has transparent padding around a 17x17 mark.
+            -- Crop to that mark so its visible diameter is the full 12 units.
+            icon:SetTexCoord(24 / 64, 41 / 64, 24 / 64, 41 / 64)
+        end
+        grip.icon = icon
+        PlaceGrip(grip)
+        grip:SetScript("OnEnter", function()
+            UpdateHover(true)
+            RefreshGrip()
+            if GameTooltip then
+                GameTooltip:SetOwner(grip, "ANCHOR_RIGHT")
+                GameTooltip:SetText("Resize Window")
+                local hint = mode == "corner" and "Drag to resize"
+                    or ((mode == "left" or mode == "right") and "Drag to change width" or "Drag to change height")
+                GameTooltip:AddLine(hint, 0.85, 0.85, 0.87)
+                if mode == "corner" then GameTooltip:AddLine("Right-click to restore default size", 0.66, 0.69, 0.72) end
+                GameTooltip:Show()
+            end
+        end)
+        grip:SetScript("OnLeave", function()
+            RefreshGrip()
+            if GameTooltip and GameTooltip.IsOwned and GameTooltip:IsOwned(grip) then GameTooltip:Hide() end
+            if not resizing then UpdateHover(false) end
+        end)
+        grip:SetScript("OnMouseDown", function(_, button) BeginResize(grip, button) end)
+        grip:SetScript("OnMouseUp", function(_, button) if button == "LeftButton" then EndResize() end end)
+        resizeGrips[#resizeGrips + 1] = grip
+        return grip
+    end
+
+    local horizontalEdge = options.resizeHandles and options.resizeHandles.horizontal
+    local verticalEdge = options.resizeHandles and options.resizeHandles.vertical
+    resizeGrip = CreateResizeGrip("corner")
+    if horizontalEdge == "left" or horizontalEdge == "right" then CreateResizeGrip(horizontalEdge) end
+    if verticalEdge == "top" or verticalEdge == "bottom" then CreateResizeGrip(verticalEdge) end
     root.resizeGrip = resizeGrip
+    root.resizeGrips = resizeGrips
+    root.PlaceResizeGrip = function()
+        for _, grip in ipairs(resizeGrips) do PlaceGrip(grip) end
+        RefreshGrip()
+    end
+    RefreshGrip()
     -- External page controls may use this shared method after changing their
     -- interaction surface; no per-window resize code is needed.
     function root:CancelResize() EndResize() end
 
     -- Collapse pins the title-side right corner (TOPRIGHT or BOTTOMRIGHT).
-    -- Resizing instead pins the diagonal opposite corner of the grip.
+    -- Resizing pins the opposite edge or corner of its active grip.
     local function PinTitleCorner()
         local right = root:GetRight()
         local parentRight = UIParent:GetRight()

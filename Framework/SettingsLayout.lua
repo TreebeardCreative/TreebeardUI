@@ -80,8 +80,8 @@ L.Metrics = {
     SECTION_BOTTOM_PADDING = 14,
     ROW_GAP = 2,
     COLUMN_GAP = 4,
-    -- Rows grow from their measured content. Consumers may request an explicit
-    -- minimum for deliberate alignment, but ordinary controls add no empty slot.
+    -- Rows grow from their measured content. This is the symmetric default
+    -- vertical inset on each Row; layout applies it above and below children.
     ROW_MIN_HEIGHT = 1,
     ROW_VERTICAL_PADDING = 1,
     -- Host-region inset is separate from the internal Row breathing room.
@@ -385,7 +385,17 @@ function L:ReflowSection(section)
     local pad = section.layoutPadding or L.Metrics.SECTION_PADDING
     local sectionGap = section.layoutGap or L.Metrics.SECTION_GAP
     local previous
-    local total = pad
+    local firstFlowChild
+    for _, child in ipairs(section.layoutChildren) do
+        if child.layoutParticipatesInFlow and child:IsShown() then
+            firstFlowChild = child
+            break
+        end
+    end
+    -- Main headers are anchored to the Section's top edge. Do not count the
+    -- Section's top inset as blank space before that header; place that inset
+    -- after the header, before the first body item, and retain one bottom inset.
+    local total = firstFlowChild and firstFlowChild.layoutRole == "main-header" and 0 or pad
 
     for _, child in ipairs(section.layoutChildren) do
         if child.layoutParticipatesInFlow and child:IsShown() then
@@ -396,6 +406,9 @@ function L:ReflowSection(section)
                 self:LayoutRow(child, math.max(1, section:GetWidth() - (pad * 2)))
             end
             local gap = previous and (child.layoutGapBefore or sectionGap) or 0
+            if previous and previous.layoutRole == "main-header" then
+                gap = math.max(gap, pad)
+            end
             local anchors
             if previous then
                 local xInset = (previous.layoutRole == "main-header") and (pad - 1) or 0
@@ -470,19 +483,36 @@ function L:Box(parent, id, opts)
 end
 
 local function NormalizeHorizontalAlign(value)
-    value = type(value) == "string" and string.upper(value) or "CENTER"
+    value = type(value) == "string" and string.upper(value) or "LEFT"
     if value ~= "LEFT" and value ~= "CENTER" and value ~= "RIGHT" then
-        return "CENTER"
+        return "LEFT"
     end
     return value
 end
 
 local function NormalizeVerticalAlign(value)
-    value = type(value) == "string" and string.upper(value) or "CENTER"
+    value = type(value) == "string" and string.upper(value) or "TOP"
     if value ~= "TOP" and value ~= "CENTER" and value ~= "BOTTOM" then
-        return "CENTER"
+        return "TOP"
     end
     return value
+end
+
+local function NormalizeLayoutPadding(value, default)
+    value = value == nil and default or value
+    if type(value) == "number" then
+        local amount = math.max(0, value)
+        return { left=amount, right=amount, top=amount, bottom=amount }
+    end
+    value = type(value) == "table" and value or {}
+    local horizontal = math.max(0, tonumber(value.horizontal or value.x) or 0)
+    local vertical = math.max(0, tonumber(value.vertical or value.y) or 0)
+    return {
+        left=math.max(0, tonumber(value.left) or horizontal),
+        right=math.max(0, tonumber(value.right) or horizontal),
+        top=math.max(0, tonumber(value.top) or vertical),
+        bottom=math.max(0, tonumber(value.bottom) or vertical),
+    }
 end
 
 function L:Row(parent, id, opts)
@@ -491,8 +521,13 @@ function L:Row(parent, id, opts)
     for key, value in pairs(opts) do rowOptions[key] = value end
     if rowOptions.gap == nil then rowOptions.gap = L.Metrics.ROW_GAP end
     local row = Node(parent, "row", id, rowOptions)
-    -- Rows control vertical alignment inside their parent allocation.
-    row.layoutAlign = NormalizeVerticalAlign(opts.align)
+    row.layoutPadding = NormalizeLayoutPadding(opts.padding,
+        { horizontal=0, vertical=L.Metrics.ROW_VERTICAL_PADDING })
+    -- Rows fill their parent Column. Children default to top-left inside the
+    -- Row's padded content area; alignment does not move the padding itself.
+    row.layoutVerticalAlign = NormalizeVerticalAlign(opts.verticalAlign or opts.align)
+    row.layoutAlign = row.layoutVerticalAlign -- legacy consumer-facing field
+    row.layoutHorizontalAlign = NormalizeHorizontalAlign(opts.horizontalAlign)
     -- Control rows keep the established shared height unless a consumer opts
     -- into a smaller slot for text-only or button-only content.
     local minHeight = tonumber(opts.minHeight)
@@ -519,27 +554,44 @@ function L:Columns(row, count, ids, opts)
     local cols = {}
     for i=1,count do
         local id = ids and ids[i] or ("column"..i)
-        local columnAlign = opts.align
-        if type(opts.alignments) == "table" and opts.alignments[i] then
-            columnAlign = opts.alignments[i]
+        local columnHorizontalAlign = opts.horizontalAlign or opts.align
+        if type(opts.horizontalAlignments) == "table" and opts.horizontalAlignments[i] then
+            columnHorizontalAlign = opts.horizontalAlignments[i]
+        elseif type(opts.alignments) == "table" and opts.alignments[i] then
+            columnHorizontalAlign = opts.alignments[i]
         end
         cols[i] = Node(row, "column", id, { gap=contentGap, padding=0 })
-        -- Columns control horizontal alignment of their content.
-        cols[i].layoutAlign = NormalizeHorizontalAlign(columnAlign)
+        local columnPadding = opts.padding
+        if type(opts.paddings) == "table" and opts.paddings[i] ~= nil then
+            columnPadding = opts.paddings[i]
+        end
+        -- Numeric padding is applied equally on all four sides. A table may
+        -- use x/y or explicit left/right/top/bottom values.
+        cols[i].layoutPadding = NormalizeLayoutPadding(columnPadding, 0)
+        cols[i].layoutHorizontalAlign = NormalizeHorizontalAlign(columnHorizontalAlign)
+        cols[i].layoutAlign = cols[i].layoutHorizontalAlign -- legacy consumer-facing field
+        local columnVerticalAlign = opts.verticalAlign
+        if type(opts.verticalAlignments) == "table" and opts.verticalAlignments[i] then
+            columnVerticalAlign = opts.verticalAlignments[i]
+        end
+        cols[i].layoutVerticalAlign = NormalizeVerticalAlign(columnVerticalAlign)
+        local minHeight = type(opts.minHeights) == "table" and tonumber(opts.minHeights[i]) or nil
+        cols[i].layoutMinHeight = minHeight and math.max(1, minHeight) or nil
+        local fixedWidth = type(opts.widths) == "table" and tonumber(opts.widths[i]) or nil
+        cols[i].layoutFixedWidth = fixedWidth and fixedWidth > 0 and fixedWidth or nil
     end
     row.layoutColumns = cols
     row.layoutColumnCount = count
     row.layoutColumnGap = columnGap
 
-    -- Optional per-row column weights. Equal columns remain the default.
-    -- Width policy belongs to the Row; child Content never chooses its Column width.
+    -- Optional per-row column weights. Equal flexible columns remain the
+    -- default. A positive `widths[i]` fixes that Column's width; all other
+    -- Columns divide the remaining width by weight.
     local weights = {}
-    local totalWeight = 0
     for i = 1, count do
         local weight = type(opts.weights) == "table" and tonumber(opts.weights[i]) or 1
         if not weight or weight <= 0 then weight = 1 end
         weights[i] = weight
-        totalWeight = totalWeight + weight
     end
     row.layoutColumnWeights = weights
 
@@ -547,32 +599,70 @@ function L:Columns(row, count, ids, opts)
         width = tonumber(width) or self:GetWidth() or 1
         local pixel = LayoutPixel(self)
         local snappedGap = CeilGrid(columnGap, pixel)
-        local usable = FloorGrid(math.max(pixel, width - snappedGap * (count - 1)), pixel)
-        local x = 0
-        local used = 0
+        local rowPadding = NormalizeLayoutPadding(self.layoutPadding, 0)
+        local innerWidth = math.max(pixel, width - rowPadding.left - rowPadding.right)
+        local usable = FloorGrid(math.max(pixel, innerWidth - snappedGap * (count - 1)), pixel)
+        local fixedTotal, flexibleWeight = 0, 0
         for i, col in ipairs(cols) do
-            -- Every Column ends on the same grid. The final unassigned
-            -- fraction remains at the Row's outside right edge.
-            local endWidth = FloorGrid(usable * (used + weights[i]) / totalWeight, pixel)
-            local startWidth = FloorGrid(usable * used / totalWeight, pixel)
-            local columnWidth = math.max(pixel, endWidth - startWidth)
+            if col.layoutFixedWidth then
+                fixedTotal = fixedTotal + FloorGrid(col.layoutFixedWidth, pixel)
+            else
+                flexibleWeight = flexibleWeight + weights[i]
+            end
+        end
+        local flexUsable = math.max(0, usable - fixedTotal)
+        local allocated, flexUsed = {}, 0
+        for i, col in ipairs(cols) do
+            if col.layoutFixedWidth then
+                allocated[i] = math.max(pixel, FloorGrid(col.layoutFixedWidth, pixel))
+            else
+                local nextUsed = flexUsed + weights[i]
+                allocated[i] = flexibleWeight > 0
+                    and math.max(pixel, FloorGrid(flexUsable * nextUsed / flexibleWeight, pixel)
+                        - FloorGrid(flexUsable * flexUsed / flexibleWeight, pixel))
+                    or pixel
+                flexUsed = nextUsed
+            end
+        end
+        local totalWidth = snappedGap * (count - 1)
+        for i = 1, count do totalWidth = totalWidth + allocated[i] end
+        local remaining = math.max(0, innerWidth - totalWidth)
+        local rowAlign = NormalizeHorizontalAlign(self.layoutHorizontalAlign)
+        local x = rowPadding.left + (rowAlign == "RIGHT" and remaining
+            or (rowAlign == "CENTER" and remaining / 2 or 0))
+        for i, col in ipairs(cols) do
+            local columnWidth = allocated[i]
             SetWidthIfChanged(col, columnWidth)
             SetHeightIfChanged(col, math.max(1, col:GetHeight() or 1))
-            SetAnchorsIfChanged(col, {{"TOPLEFT", self, "TOPLEFT", x, 0}})
+            SetAnchorsIfChanged(col, {{"TOPLEFT", self, "TOPLEFT", x, -rowPadding.top}})
             x = x + columnWidth + snappedGap
-            used = used + weights[i]
         end
     end
 
     function row:GetColumnWidth(index)
         local pixel = LayoutPixel(self)
         local width = self:GetWidth() or 1
-        local usable = FloorGrid(math.max(pixel, width - CeilGrid(gap, pixel) * (count - 1)), pixel)
         index = math.max(1, math.min(count, tonumber(index) or 1))
+        if (cols[index]:GetWidth() or 0) > 0 then return cols[index]:GetWidth() end
+        if cols[index].layoutFixedWidth then
+            return math.max(pixel, FloorGrid(cols[index].layoutFixedWidth, pixel))
+        end
+        local rowPadding = NormalizeLayoutPadding(self.layoutPadding, 0)
+        local usable = FloorGrid(math.max(pixel, width - rowPadding.left - rowPadding.right
+            - CeilGrid(columnGap, pixel) * (count - 1)), pixel)
         local before = 0
-        for i=1,index-1 do before = before + weights[i] end
-        return math.max(pixel, FloorGrid(usable * (before + weights[index]) / totalWeight, pixel)
-            - FloorGrid(usable * before / totalWeight, pixel))
+        local fixed, flexibleWeight = 0, 0
+        for i = 1, count do
+            if cols[i].layoutFixedWidth then
+                fixed = fixed + cols[i].layoutFixedWidth
+            else
+                flexibleWeight = flexibleWeight + weights[i]
+                if i < index then before = before + weights[i] end
+            end
+        end
+        local flexUsable = math.max(0, usable - fixed)
+        return math.max(pixel, FloorGrid(flexUsable * (before + weights[index]) / math.max(1, flexibleWeight), pixel)
+            - FloorGrid(flexUsable * before / math.max(1, flexibleWeight), pixel))
     end
     return cols
 end
@@ -606,14 +696,14 @@ function L:SectionPair(parent, id, leftId, rightId, opts)
 end
 
 function L:GetRowVerticalAnchor(row)
-    local align = NormalizeVerticalAlign(row and row.layoutAlign)
+    local align = NormalizeVerticalAlign(row and row.layoutVerticalAlign)
     if align == "TOP" then return "TOP" end
     if align == "BOTTOM" then return "BOTTOM" end
     return "CENTER"
 end
 
 function L:GetColumnHorizontalAnchor(column)
-    local align = NormalizeHorizontalAlign(column and column.layoutAlign)
+    local align = NormalizeHorizontalAlign(column and column.layoutHorizontalAlign)
     if align == "LEFT" then return "LEFT" end
     if align == "RIGHT" then return "RIGHT" end
     return "CENTER"
@@ -657,6 +747,7 @@ function L:LayoutRow(row, width)
     local pixel = LayoutPixel(row)
     width = math.max(pixel, FloorGrid(width, pixel))
     SetWidthIfChanged(row, width)
+    local rowPadding = NormalizeLayoutPadding(row.layoutPadding, 0)
     row:LayoutColumns(width)
 
     -- Recursive layout contract:
@@ -666,9 +757,12 @@ function L:LayoutRow(row, width)
     -- tallest Column. No presentation concept (box/header/subsection) participates
     -- in this geometry contract.
     for _, col in ipairs(row.layoutColumns) do
-        local columnWidth = math.max(1, col:GetWidth() or 1)
+        local outerColumnWidth = math.max(1, col:GetWidth() or 1)
+        local columnPadding = NormalizeLayoutPadding(col.layoutPadding, 0)
+        local columnWidth = math.max(1, outerColumnWidth - columnPadding.left - columnPadding.right)
         local previous
         local totalHeight = 0
+        local placements = {}
 
         for _, child in ipairs(col.layoutChildren or {}) do
             if child:IsShown() and (child.layoutParticipatesInFlow or child.layoutKind == "section" or child.layoutKind == "row") then
@@ -678,18 +772,21 @@ function L:LayoutRow(row, width)
                 local gap = previous and (child.layoutGapBefore or col.layoutGap or L.Metrics.ROW_GAP) or 0
                 totalHeight = totalHeight + math.max(0, gap)
                 local anchors
+                local childTop = columnPadding.top + totalHeight
                 if child.layoutKind == "section" then
                     SetWidthIfChanged(child, columnWidth)
                     anchors = {
-                        {"TOPLEFT", col, "TOPLEFT", 0, -totalHeight},
-                        {"RIGHT", col, "RIGHT", 0, 0},
+                        {"TOPLEFT", col, "TOPLEFT", columnPadding.left, -childTop},
+                        {"TOPRIGHT", col, "TOPRIGHT", -columnPadding.right, -childTop},
                     }
                     SetAnchorsIfChanged(child, anchors)
+                    placements[#placements + 1] = { child=child, anchors=anchors }
                     self:ReflowSection(child)
                 elseif child.layoutKind == "row" then
                     SetWidthIfChanged(child, columnWidth)
-                    anchors = {{"TOPLEFT", col, "TOPLEFT", 0, -totalHeight}}
+                    anchors = {{"TOPLEFT", col, "TOPLEFT", columnPadding.left, -childTop}}
                     SetAnchorsIfChanged(child, anchors)
+                    placements[#placements + 1] = { child=child, anchors=anchors }
                     self:LayoutRow(child, columnWidth)
                 else
                     if child.layoutWrap and child.GetObjectType and child:GetObjectType() == "FontString" then
@@ -704,13 +801,14 @@ function L:LayoutRow(row, width)
                     end
                     local anchor = self:GetColumnHorizontalAnchor(col)
                     if child.layoutFillWidth or anchor == "LEFT" then
-                        anchors = {{"TOPLEFT", col, "TOPLEFT", 0, -totalHeight}}
+                        anchors = {{"TOPLEFT", col, "TOPLEFT", columnPadding.left, -childTop}}
                     elseif anchor == "RIGHT" then
-                        anchors = {{"TOPRIGHT", col, "TOPRIGHT", 0, -totalHeight}}
+                        anchors = {{"TOPRIGHT", col, "TOPRIGHT", -columnPadding.right, -childTop}}
                     else
-                        anchors = {{"TOP", col, "TOP", 0, -totalHeight}}
+                        anchors = {{"TOP", col, "TOP", (columnPadding.left - columnPadding.right) / 2, -childTop}}
                     end
                     SetAnchorsIfChanged(child, anchors)
+                    placements[#placements + 1] = { child=child, anchors=anchors }
                 end
 
                 local childHeight = self:MeasureContent(child)
@@ -722,24 +820,37 @@ function L:LayoutRow(row, width)
         -- Every layout pass owns the current measurement, including an empty
         -- Column. Never retain a previous Content height after its children stop
         -- participating in flow; the structural Column remains, but measures empty.
-        col.layoutContentHeight = math.max(1, totalHeight)
-        SetHeightIfChanged(col, col.layoutContentHeight)
+        col.layoutContentHeight = math.max(1,
+            columnPadding.top + totalHeight + columnPadding.bottom)
+        col.layoutAllocatedHeight = math.max(col.layoutContentHeight, col.layoutMinHeight or 0)
+        SetHeightIfChanged(col, col.layoutAllocatedHeight)
+        local freeHeight = math.max(0, col.layoutAllocatedHeight - col.layoutContentHeight)
+        local vertical = NormalizeVerticalAlign(col.layoutVerticalAlign)
+        local contentOffset = vertical == "BOTTOM" and freeHeight
+            or (vertical == "CENTER" and freeHeight / 2 or 0)
+        if contentOffset > 0 then
+            for _, placement in ipairs(placements) do
+                local shifted = {}
+                for i, anchorSpec in ipairs(placement.anchors) do
+                    shifted[i] = {anchorSpec[1], anchorSpec[2], anchorSpec[3], anchorSpec[4], anchorSpec[5] - contentOffset}
+                end
+                SetAnchorsIfChanged(placement.child, shifted)
+            end
+        end
     end
 
     self:MeasureRow(row)
-    -- Default Row vertical alignment is CENTER. Each Column keeps its own
-    -- measured contents as a block and is placed within the tallest Column's
-    -- Row height. This is a structural layout rule, not per-control padding.
-    -- Consumers may still request align="TOP" or align="BOTTOM" on the Row.
+    -- Rows keep their own order and use their selected vertical alignment only
+    -- to place shorter Columns within the measured Row height.
     local anchor = self:GetRowVerticalAnchor(row)
     local rowHeight = row:GetHeight()
-    local columnX = 0
+    local innerHeight = math.max(0, rowHeight - rowPadding.top - rowPadding.bottom)
     for _, col in ipairs(row.layoutColumns) do
-        local contentHeight = col.layoutContentHeight or 0
-        local remaining = math.max(0, rowHeight - contentHeight)
+        local contentHeight = col.layoutAllocatedHeight or col.layoutContentHeight or 0
+        local remaining = math.max(0, innerHeight - contentHeight)
         local offsetY = anchor == "BOTTOM" and remaining or (anchor == "CENTER" and remaining / 2 or 0)
-        SetAnchorsIfChanged(col, {{"TOPLEFT", row, "TOPLEFT", columnX, -offsetY}})
-        columnX = columnX + (col:GetWidth() or 0) + (row.layoutColumnGap or 0)
+        local columnX = col._tbuLayoutAnchorSpec and col._tbuLayoutAnchorSpec[1][4] or 0
+        SetAnchorsIfChanged(col, {{"TOPLEFT", row, "TOPLEFT", columnX, -(rowPadding.top + offsetY)}})
     end
     return rowHeight
 end
@@ -886,8 +997,8 @@ function L:AdoptChild(parent, child, opts)
 end
 
 function L:PageSectionRow(page, id, section)
-    local row = self:Row(page, id, { gap = 0 })
-    local columns = self:Columns(row, 1, { id .. "-column" }, { gap = 0 })
+    local row = self:Row(page, id, { gap = 0, padding = 0 })
+    local columns = self:Columns(row, 1, { id .. "-column" }, { gap = 0, padding = 0 })
     local column = columns[1]
     self:AdoptChild(column, section, { role = "section" })
     row.layoutSection = section
@@ -937,12 +1048,13 @@ function L:MeasureRow(row, bottomPadding)
     local tallest = 0
     for _,col in ipairs(row.layoutColumns or {}) do
         if col:IsShown() then
-            tallest = math.max(tallest, col.layoutContentHeight or col:GetHeight() or 0)
+            tallest = math.max(tallest, col.layoutAllocatedHeight or col.layoutContentHeight or col:GetHeight() or 0)
         end
     end
-    -- Vertical breathing room is a Row rule, not a Content-type rule.
-    -- Rows otherwise grow from measured content instead of reserving a tall slot.
-    local natural = tallest + (2 * L.Metrics.ROW_VERTICAL_PADDING) + (bottomPadding or 0)
+    -- Symmetric Row padding is included in its measured outer height. Rows
+    -- otherwise grow from measured content instead of reserving a tall slot.
+    local rowPadding = NormalizeLayoutPadding(row.layoutPadding, 0)
+    local natural = tallest + rowPadding.top + rowPadding.bottom + (bottomPadding or 0)
     SetHeightIfChanged(row, math.max(row.layoutMinHeight or L.Metrics.ROW_MIN_HEIGHT, natural))
     return row:GetHeight()
 end

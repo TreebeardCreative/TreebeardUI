@@ -1304,21 +1304,6 @@ local function AddSingleDropdown(parent, label, x, y, options, getter, setter, w
     return button
 end
 
-local function AddCheckbox(parent, label, x, y, getter, setter)
-    local cb = CreateLargeCheckbox(parent)
-    cb:SetPoint("TOPLEFT", x, y)
-    cb.Text:SetText(label)
-    ApplyContentText(cb.Text)
-    ApplyRoleColor(cb.Text, "value")
-    cb:SetChecked(getter())
-    RegisterStatefulControl(cb, function() cb:SetChecked(getter()) end)
-    cb:SetScript("OnClick", function(self)
-        setter(self:GetChecked())
-        TBU:RefreshAll()
-    end)
-    return cb
-end
-
 -- Shared native-slider presentation. Values, labels, and behavior are supplied by
 -- the consumer; input handling stays on WoW's native Slider frame. Unlike the
 -- former OptionsSliderTemplate wrapper, every visible region is TreebeardUI-owned.
@@ -1818,12 +1803,18 @@ local function AddModuleSelectionDropdown(parent, label, x, y, options, selected
     return dd
 end
 
-local function AddActionButton(parent, label, x, y, width, callback)
+local function AddActionButton(parent, label, x, y, width, callback, labelOptions)
     -- Reuse the same preset-aware buttons as navigation, output and chrome.
     -- Unlike UIPanelButtonTemplate this has no Blizzard border or text theme.
-    local button = TBU.WindowStyles:CreateButton(parent, label, width or 170, callback or function() end)
+    local button = TBU.WindowStyles:CreateButton(parent, label, width or 170,
+        callback or function() end, nil, labelOptions)
     button:SetPoint("TOPLEFT", x, y)
-    button:SetHeight(24)
+    if button.labelOptions and button.labelOptions.autoHeight then
+        button.labelOptions.minHeight = math.max(1, tonumber(button.labelOptions.minHeight) or 24)
+        button:UpdateLabelGeometry()
+    else
+        button:SetHeight(24)
+    end
     return button
 end
 
@@ -1835,10 +1826,24 @@ local function AddActionButtonContent(parent, label, callback, options)
     content.layoutKind = "content"
     content:SetHeight(24)
 
-    local button = AddActionButton(content, label, 0, 0, 1, callback or function() end)
+    local labelOptions = {}
+    for key, value in pairs(options) do labelOptions[key] = value end
+    labelOptions.horizontalPadding = math.max(0,
+        tonumber(options.horizontalPadding) or 12)
+    local button = AddActionButton(content, label, 0, 0, 1,
+        callback or function() end, labelOptions)
     button:ClearAllPoints()
     button:SetAllPoints(content)
-    local pad = math.max(0, tonumber(options.horizontalPadding) or 12)
+    if button.labelOptions and button.labelOptions.autoHeight then
+        button:HookScript("OnSizeChanged", function(target)
+            local height = target:GetHeight() or 24
+            if math.abs((content:GetHeight() or 0) - height) > 0.0001 then
+                content:SetHeight(height)
+            end
+        end)
+        button:UpdateLabelGeometry()
+    end
+    local pad = labelOptions.horizontalPadding
     local natural = math.ceil((button.label and button.label:GetStringWidth() or 0) + pad * 2)
     content:SetWidth(mode == "fixed" and math.max(1, tonumber(options.width) or natural) or math.max(1, natural))
     content.layoutButtonWidthMode = mode
@@ -1846,27 +1851,22 @@ local function AddActionButtonContent(parent, label, callback, options)
     return content
 end
 
--- Shared commit path for standalone radio/selection controls.  A selection
+-- Shared commit path for standalone choice controls. A selection
 -- change is local UI state and should be applied to the HUD immediately, just
 -- like Dropdown and MultiDropdown changes.  Keep this behavior here so every
--- radio/selection instance inherits it instead of patching individual settings.
-local function CommitRadioSelection(setter, value)
+-- choice instance inherits it instead of patching individual settings.
+local function CommitChoiceSelection(setter, value)
     if setter then setter(value) end
     TBU:RefreshAll()
 end
 
--- Temporary selection/radio row is shared by Account-Wide and the Layout
--- Vocabulary reference, so it must live outside InitializeSettings. Keeping it
--- here also gives the control its own local-variable scope.
-local function AddTemporarySelectionRow(parentColumn, id, label, getter, setter)
-    -- Transitional boolean selector used by the live Account-Wide settings.
-    -- It intentionally behaves like one Dropdown option row: the entire text
-    -- region is clickable, the shared hover highlight advertises that fact,
-    -- and the checkbox is only the visual state indicator.
+-- Standalone checkbox content for consumer-owned boolean values. The full row
+-- is clickable, while the checkbox remains the visible state indicator. The
+-- row participates in column flow and grows to fit a wrapped label.
+local function AddCheckbox(parentColumn, label, getter, setter)
     local content = CreateFrame("Button", nil, parentColumn)
     content.layoutKind = "content"
     content.layoutRole = "selection"
-    content.layoutId = id
 
     local compactHighlightWidth = 1
     local highlight = AddDropdownOptionHighlight(content, nil, function() return compactHighlightWidth end)
@@ -1906,7 +1906,7 @@ local function AddTemporarySelectionRow(parentColumn, id, label, getter, setter)
     end
 
     content:SetScript("OnClick", function()
-        CommitRadioSelection(setter, not (getter and getter() and true or false))
+        CommitChoiceSelection(setter, not (getter and getter() and true or false))
         Refresh()
     end)
     content:SetScript("OnSizeChanged", function(_, width)
@@ -1979,7 +1979,7 @@ local function AddRadioSelectorContent(parent, label, options, getter, setter)
                 row.text = text
 
                 row:SetScript("OnClick", function(self)
-                    if self.value ~= nil then CommitRadioSelection(setter, self.value) end
+                    if self.value ~= nil then CommitChoiceSelection(setter, self.value) end
                     Refresh()
                 end)
                 content.rows[index] = row
@@ -2395,7 +2395,6 @@ SC.SetDropdownLabelAlignment = SetDropdownLabelAlignment
 SC.AddModuleSelectionDropdown = AddModuleSelectionDropdown
 SC.AddActionButton = AddActionButton
 SC.AddActionButtonContent = AddActionButtonContent
-SC.AddTemporarySelectionRow = AddTemporarySelectionRow
 SC.AddRadioSelectorContent = AddRadioSelectorContent
 SC.AddTextInputContent = AddTextInputContent
 SC.AddHexColorContent = AddHexColorContent
