@@ -65,6 +65,7 @@ function Host:BringToFront(window)
         frame:SetFrameLevel(base)
         if frame.windowHeader then frame.windowHeader:SetFrameLevel(base + 1) end
         if frame.content then frame.content:SetFrameLevel(base + 1) end
+        if frame.windowBodyBorder then frame.windowBodyBorder:SetFrameLevel(base + 8) end
         if frame.windowEdges then
             for _, edge in ipairs(frame.windowEdges) do edge:SetFrameLevel(base + 8) end
         end
@@ -89,8 +90,62 @@ local function CharacterWindowState(owner)
     return state
 end
 
+-- Title chrome is an optional component of the window assembly. Keeping its
+-- construction separate lets a consumer request a bare frame without
+-- creating title controls or a title label.
+local function CreateTitleBar(parent, title, style, outline)
+    local header = CreateFrame("Frame", nil, parent)
+    header:SetHeight(style.titleHeight)
+    header:EnableMouse(true)
+    header.bg = Styles:CreateFlatTexture(header, "BACKGROUND", style.title)
+    header.bg:SetAllPoints(header)
+
+    local heading = header:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    heading:SetPoint("LEFT", header, "LEFT", 13, 0)
+    heading:SetText(title or "")
+    heading:SetTextColor(unpack(style.text))
+    heading:SetJustifyH("LEFT")
+    heading:SetJustifyV("MIDDLE")
+    heading:SetWordWrap(true)
+    if heading.SetNonSpaceWrap then heading:SetNonSpaceWrap(true) end
+    header.label = heading
+    if outline then
+        local edgeSize = style.edgeSize or 1
+        local edges = {}
+        local function AddEdge(point1, relativePoint1, point2, relativePoint2, width, height)
+            local edge = Styles:CreateFlatTexture(header, "OVERLAY", style.border)
+            edge:SetPoint(point1, header, relativePoint1, 0, 0)
+            edge:SetPoint(point2, header, relativePoint2, 0, 0)
+            if width then edge:SetWidth(width) end
+            if height then edge:SetHeight(height) end
+            edges[#edges + 1] = edge
+            return edge
+        end
+        AddEdge("TOPLEFT", "TOPLEFT", "TOPRIGHT", "TOPRIGHT", nil, edgeSize)
+        AddEdge("TOPLEFT", "TOPLEFT", "BOTTOMLEFT", "BOTTOMLEFT", edgeSize, nil)
+        AddEdge("TOPRIGHT", "TOPRIGHT", "BOTTOMRIGHT", "BOTTOMRIGHT", edgeSize, nil)
+        header.borderEdges = edges
+    end
+    return header, heading
+end
+
 function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, minHeight, owner, options)
     options = options or {}
+    -- Keep the established title-bar behavior unless a consumer selects a
+    -- different composition. The frame remains usable without title chrome.
+    local titleBarMode = options.titleBar
+    if titleBarMode == nil then titleBarMode = "always" end
+    if titleBarMode ~= "always" and titleBarMode ~= "hover" and titleBarMode ~= "never" then
+        titleBarMode = "always"
+    end
+    local titleBarWidthOption = options.titleBarWidth
+    local titleBarWidthMode = titleBarWidthOption == "content" and "content" or "percent"
+    local titleBarWidthPercent = tonumber(titleBarWidthOption) or 100
+    if titleBarWidthPercent <= 0 then titleBarWidthPercent = 100 end
+    local titleBarAnchor = options.titleBarAnchor
+    if titleBarAnchor ~= "center" and titleBarAnchor ~= "right" then
+        titleBarAnchor = "left"
+    end
     local preset = nil -- use live per-owner preset for window chrome
     local style = Styles:Get(Styles:GetConsumerPreset(owner))
     local root = TBU.Compatibility:CreateBackdropFrame("Frame", UIParent)
@@ -109,8 +164,12 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
         self:SetClampedToScreen(true)
         SnapWindowRectangle(self, true)
     end
-    root.minimumWidth = math.max(320, tonumber(minWidth) or 320)
-    root.minimumHeight = math.max(120, tonumber(minHeight) or 120)
+    local configuredMinWidth = tonumber(options.minWidth)
+    local configuredMinHeight = tonumber(options.minHeight)
+    root.minimumWidth = configuredMinWidth and math.max(1, configuredMinWidth)
+        or math.max(320, tonumber(minWidth) or 320)
+    root.minimumHeight = configuredMinHeight and math.max(1, configuredMinHeight)
+        or math.max(120, tonumber(minHeight) or 120)
     local initialState = CharacterWindowState(owner)
     local storedSize = initialState and initialState.windowSizes[key]
     local initialWidth = storedSize and tonumber(storedSize.width) or width
@@ -144,7 +203,8 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
         if not self.collapsed then self.expandedHeight = self:GetHeight() end
     end
     root:SetFrameStrata("DIALOG")
-    root:SetMovable(true)
+    root.movementEnabled = options.movable ~= false
+    root:SetMovable(root.movementEnabled)
     root:EnableMouse(true)
     root:SetClampedToScreen(true)
     root:Hide()
@@ -159,49 +219,168 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
     end
     SnapWindowRectangle(root)
 
-    local header = CreateFrame("Frame", nil, root)
-    header:SetHeight(style.titleHeight)
-    header:EnableMouse(true)
-    header.bg = Styles:CreateFlatTexture(header, "BACKGROUND", style.title)
-    header.bg:SetAllPoints(header)
-    root.windowHeader = header
-
-    local heading = header:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    heading:SetPoint("LEFT", header, "LEFT", 13, 0)
-    heading:SetText(title)
-    heading:SetTextColor(unpack(style.text))
-    heading:SetJustifyH("LEFT")
-    heading:SetJustifyV("MIDDLE")
-    heading:SetWordWrap(true)
-    if heading.SetNonSpaceWrap then heading:SetNonSpaceWrap(true) end
-    header.label = heading
+    local header, heading
+    if titleBarMode ~= "never" then
+        header, heading = CreateTitleBar(root, title, style, true)
+        root.windowHeader = header
+        root.titleBar = header
+    end
 
     local content = CreateFrame("Frame", nil, root)
     root.content = content
 
+    -- With an always-visible title bar, keep the root's bare-frame outline
+    -- around the body only. The title bar supplies its own three outer sides;
+    -- the body's top edge meets the open bottom of that title outline.
+    local bodyBorder
+    if titleBarMode == "always" and header then
+        bodyBorder = CreateFrame("Frame", nil, root)
+        bodyBorder:EnableMouse(false)
+        bodyBorder:SetFrameLevel(root:GetFrameLevel() + 8)
+        root.windowBodyBorder = bodyBorder
+        root._tbuSplitTitleAndBodyBorder = true
+        local edges = {}
+        local edgeSize = style.edgeSize or 1
+        local function AddEdge(point1, relativePoint1, point2, relativePoint2, width, height)
+            local edge = Styles:CreateFlatTexture(bodyBorder, "OVERLAY", style.border)
+            edge:SetPoint(point1, bodyBorder, relativePoint1, 0, 0)
+            edge:SetPoint(point2, bodyBorder, relativePoint2, 0, 0)
+            if width then edge:SetWidth(width) end
+            if height then edge:SetHeight(height) end
+            edges[#edges + 1] = edge
+        end
+        AddEdge("TOPLEFT", "TOPLEFT", "TOPRIGHT", "TOPRIGHT", nil, edgeSize)
+        AddEdge("TOPLEFT", "TOPLEFT", "BOTTOMLEFT", "BOTTOMLEFT", edgeSize, nil)
+        AddEdge("TOPRIGHT", "TOPRIGHT", "BOTTOMRIGHT", "BOTTOMRIGHT", edgeSize, nil)
+        AddEdge("BOTTOMLEFT", "BOTTOMLEFT", "BOTTOMRIGHT", "BOTTOMRIGHT", nil, edgeSize)
+        bodyBorder.borderEdges = edges
+    end
+
+    local function SetContentTitleSpacing(reserveTitleBar)
+        content:ClearAllPoints()
+        local titleHeight = reserveTitleBar and header and (header:GetHeight() or 0) or 0
+        if root.titlePosition == "bottom" then
+            content:SetPoint("TOPLEFT", root, "TOPLEFT", 1, -1)
+            content:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", -1, titleHeight + 2)
+        else
+            content:SetPoint("TOPLEFT", root, "TOPLEFT", 1, -titleHeight - 1)
+            content:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", -1, 1)
+        end
+    end
+
+    local function SetTitleBarBackgroundBounds()
+        if not (header and header.bg) then return end
+        header.bg:ClearAllPoints()
+        local borderInset = style.edgeSize or 1
+        if titleBarMode == "always" and root.titlePosition == "bottom" then
+            -- Keep the outer bottom border visible while filling the gap on
+            -- the content-facing side of a bottom title bar.
+            header.bg:SetPoint("TOPLEFT", header, "TOPLEFT", borderInset, borderInset)
+            header.bg:SetPoint("BOTTOMRIGHT", header, "BOTTOMRIGHT", -borderInset, borderInset)
+        elseif titleBarMode == "always" then
+            -- Keep the main frame's top and side outline visible, and extend
+            -- only toward the pane to cover the one-unit content seam.
+            header.bg:SetPoint("TOPLEFT", header, "TOPLEFT", borderInset, -borderInset)
+            header.bg:SetPoint("BOTTOMRIGHT", header, "BOTTOMRIGHT", -borderInset, -borderInset)
+        else
+            -- Hover chrome is outside the main frame, so keep its fill under
+            -- its own outline and off the main frame's shared border.
+            header.bg:SetPoint("TOPLEFT", header, "TOPLEFT", borderInset, -borderInset)
+            header.bg:SetPoint("BOTTOMRIGHT", header, "BOTTOMRIGHT", -borderInset, borderInset)
+        end
+    end
+
+    local function TitleBarContentWidth()
+        local textWidth = math.max(0, (heading and heading:GetStringWidth()) or 0)
+        local closeWidth = root.closeButton and (root.closeButton:GetWidth() or 25) or 0
+        local collapseWidth = root.collapseButton and (root.collapseButton:GetWidth() or 25) or 0
+        local controlsWidth = closeWidth + collapseWidth
+        local controlsGap = closeWidth > 0 and collapseWidth > 0 and 5 or 0
+        local labelGap = controlsWidth > 0 and 8 or 0
+        return math.ceil(13 + textWidth + labelGap + controlsWidth + controlsGap + 8)
+    end
+
+    local function SetTitleBarHorizontalAnchors()
+        if not header then return end
+        header:ClearAllPoints()
+        if root.titlePosition == "bottom" then
+            if titleBarMode == "hover" then
+                header:SetPoint("TOP", root, "BOTTOM", 0, 0)
+            else
+                header:SetPoint("BOTTOM", root, "BOTTOM", 0, 1)
+            end
+        else
+            if titleBarMode == "hover" then
+                header:SetPoint("BOTTOM", root, "TOP", 0, 0)
+            else
+                header:SetPoint("TOP", root, "TOP", 0, 0)
+            end
+        end
+        if titleBarWidthMode == "percent" and math.abs(titleBarWidthPercent - 100) < 0.001 then
+            header:SetPoint("LEFT", root, "LEFT", 0, 0)
+            header:SetPoint("RIGHT", root, "RIGHT", 0, 0)
+            return
+        end
+        local width
+        if titleBarWidthMode == "content" then
+            width = TitleBarContentWidth()
+        else
+            width = (tonumber(root:GetWidth()) or 1) * titleBarWidthPercent / 100
+        end
+        local screenWidth = tonumber(UIParent:GetWidth()) or width
+        header:SetWidth(math.max(1, math.min(width, math.max(1, screenWidth - 20))))
+        if titleBarAnchor == "center" then
+            local leftOffset = ((tonumber(root:GetWidth()) or width) - header:GetWidth()) / 2
+            header:SetPoint("LEFT", root, "LEFT", leftOffset, 0)
+        elseif titleBarAnchor == "right" then
+            header:SetPoint("RIGHT", root, "RIGHT", 0, 0)
+        else
+            header:SetPoint("LEFT", root, "LEFT", 0, 0)
+        end
+    end
+
+    local function SetBodyBorderBounds()
+        if not bodyBorder or not header then return end
+        bodyBorder:ClearAllPoints()
+        if root.titlePosition == "bottom" then
+            bodyBorder:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
+            bodyBorder:SetPoint("BOTTOMRIGHT", header, "TOPRIGHT", 0, 0)
+        else
+            bodyBorder:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, 0)
+            bodyBorder:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", 0, 0)
+        end
+    end
+
     -- One reversible anchor policy for every shared window instance. Both
     -- title label and action buttons are header children and move together.
     function root:SetTitlePosition(position)
+        if not header then return false end
         position = position == "bottom" and "bottom" or "top"
         self.titlePosition = position
-        header:ClearAllPoints()
-        content:ClearAllPoints()
-        if position == "bottom" then
-            header:SetPoint("BOTTOMLEFT", self, "BOTTOMLEFT", 1, 1)
-            header:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", -1, 1)
-            content:SetPoint("TOPLEFT", self, "TOPLEFT", 1, -1)
-            content:SetPoint("BOTTOMRIGHT", header, "TOPRIGHT", 0, 1)
-        else
-            header:SetPoint("TOPLEFT", self, "TOPLEFT", 1, -1)
-            header:SetPoint("TOPRIGHT", self, "TOPRIGHT", -1, -1)
-            content:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, -1)
-            content:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", -1, 1)
-        end
+        SetTitleBarHorizontalAnchors()
+        SetTitleBarBackgroundBounds()
+        SetBodyBorderBounds()
+        -- Hover chrome grows outside the basic frame; it never reserves space
+        -- by moving or resizing the content area.
+        SetContentTitleSpacing(titleBarMode ~= "hover")
         local charState = CharacterWindowState(owner)
         if charState then charState.windowTitlePositions[key] = position end
         if self.PlaceResizeGrip then self:PlaceResizeGrip() end
     end
-    root:SetTitlePosition(state and state.windowTitlePositions[key] or "top")
+    if header then
+        root:SetTitlePosition(options.titleBarPosition or (state and state.windowTitlePositions[key]) or "top")
+    else
+        root.titlePosition = options.titleBarPosition == "bottom" and "bottom" or "top"
+        content:SetPoint("TOPLEFT", root, "TOPLEFT", 1, -1)
+        content:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", -1, 1)
+    end
+    function root:RefreshTitleBarVisibility()
+        if not header then return end
+        local visible = titleBarMode == "always"
+            or (titleBarMode == "hover" and (hovering or dragging or resizing or self.collapsed))
+        header:SetShown(visible)
+    end
+    root:RefreshTitleBarVisibility()
     -- Generic window pane chrome. All contents (settings/debug/future notepad)
     -- can request a compact header and footer from one shared layout host.
     -- Header/footer are structural slots, not page-specific content builders.
@@ -474,6 +653,7 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
                 tex:Show()
             end
         end
+        if root.RefreshTitleBarVisibility then root:RefreshTitleBarVisibility() end
     end
     root.RefreshWindowStyle = Repaint
     Styles:RegisterVisual(root, function(window)
@@ -510,8 +690,23 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
         end
     end
     root.RefreshResizeGrip = RefreshGrip
-    root:HookScript("OnEnter", function() hovering = true; Repaint(); RefreshGrip() end)
-    root:HookScript("OnLeave", function() hovering = false; Repaint(); RefreshGrip() end)
+    root:HookScript("OnEnter", function()
+        hovering = true
+        root:RefreshTitleBarVisibility()
+        Repaint()
+        RefreshGrip()
+    end)
+    root:HookScript("OnLeave", function()
+        -- Hover title bars sit outside the basic frame bounds. Keep the
+        -- revealed state active while the pointer moves from the frame onto
+        -- its external title-bar surface.
+        hovering = (root.IsMouseOver and root:IsMouseOver())
+            or (header and header.IsMouseOver and header:IsMouseOver())
+            or false
+        root:RefreshTitleBarVisibility()
+        Repaint()
+        RefreshGrip()
+    end)
 
     local function SaveSize()
         local charState = CharacterWindowState(owner)
@@ -553,7 +748,7 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
     end)
 
     local function BeginDrag(_, button)
-        if button ~= "LeftButton" or resizing then return end
+        if not root.movementEnabled or button ~= "LeftButton" or resizing then return end
         Host:BringToFront(root)
         SnapWindowRectangle(root)
         dragging = true
@@ -569,24 +764,32 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
         RefreshGrip()
     end
     local function UpdateHover(on)
-        hovering = on and true or false
+        if on then
+            hovering = true
+        elseif titleBarMode == "hover" then
+            hovering = root.IsMouseOver and root:IsMouseOver() or false
+        else
+            hovering = false
+        end
         Repaint()
         RefreshGrip()
     end
 
     -- Drag from the title background (excluding action buttons).
-    header:SetScript("OnEnter", function() UpdateHover(true) end)
-    header:SetScript("OnLeave", function() UpdateHover(false) end)
-    header:SetScript("OnMouseDown", BeginDrag)
-    header:SetScript("OnMouseUp", function(handle, button)
-        if button == "RightButton" then
-            EndDrag()
-            root:SetTitlePosition(root.titlePosition == "top" and "bottom" or "top")
-            TBU:Log(owner, "Window title: " .. root.titlePosition .. " (" .. key .. ")")
-        else
-            ReleaseDrag(handle, button)
-        end
-    end)
+    if header then
+        header:SetScript("OnEnter", function() UpdateHover(true) end)
+        header:SetScript("OnLeave", function() UpdateHover(false) end)
+        header:SetScript("OnMouseDown", BeginDrag)
+        header:SetScript("OnMouseUp", function(handle, button)
+            if button == "RightButton" then
+                EndDrag()
+                root:SetTitlePosition(root.titlePosition == "top" and "bottom" or "top")
+                TBU:Log(owner, "Window title: " .. root.titlePosition .. " (" .. key .. ")")
+            else
+                ReleaseDrag(handle, button)
+            end
+        end)
+    end
 
     -- Four immediate perimeter drag handles, same principle as HUD Groups.
     -- Handles deliberately overlap the first few pixels inside the frame.
@@ -770,11 +973,14 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
         return grip
     end
 
-    local horizontalEdge = options.resizeHandles and options.resizeHandles.horizontal
-    local verticalEdge = options.resizeHandles and options.resizeHandles.vertical
-    resizeGrip = CreateResizeGrip("corner")
-    if horizontalEdge == "left" or horizontalEdge == "right" then CreateResizeGrip(horizontalEdge) end
-    if verticalEdge == "top" or verticalEdge == "bottom" then CreateResizeGrip(verticalEdge) end
+    local resizeConfig = type(options.resizeHandles) == "table" and options.resizeHandles or nil
+    local horizontalEdge = resizeConfig and resizeConfig.horizontal
+    local verticalEdge = resizeConfig and resizeConfig.vertical
+    local resizeEnabled = options.resizeHandles ~= false
+    local cornerEnabled = resizeEnabled and (not resizeConfig or resizeConfig.corner ~= false)
+    if cornerEnabled then resizeGrip = CreateResizeGrip("corner") end
+    if resizeEnabled and (horizontalEdge == "left" or horizontalEdge == "right") then CreateResizeGrip(horizontalEdge) end
+    if resizeEnabled and (verticalEdge == "top" or verticalEdge == "bottom") then CreateResizeGrip(verticalEdge) end
     root.resizeGrip = resizeGrip
     root.resizeGrips = resizeGrips
     root.PlaceResizeGrip = function()
@@ -831,6 +1037,8 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
     end
 
     function root:SetCollapsed(collapsed)
+        -- A bare frame has no title-bar surface to collapse into.
+        if not header or options.collapseButton == false then return false end
         collapsed = collapsed and true or false
         if self.collapsed ~= collapsed then
             if PinTitleCorner() then SavePosition() end
@@ -848,40 +1056,59 @@ function Host:Create(key, title, width, height, defaultX, defaultY, minWidth, mi
         if self.collapseButton then
             self.collapseButton.label:SetText("")
         end
+        if self.RefreshTitleBarVisibility then self:RefreshTitleBarVisibility() end
         if self.RefreshResizeGrip then self:RefreshResizeGrip() end
+        return true
     end
 
-    local close = Styles:CreateButton(header, "X", 25, function() root:Hide() end, preset)
-    close:SetPoint("RIGHT", header, "RIGHT", -8, 0)
-    close:SetFrameLevel(root:GetFrameLevel() + 22)
-    close:SetHeight(24)
-    SetWindowButtonGlyph(close, "exit_icon")
-    root.closeButton = close
-    local collapse = Styles:CreateButton(header, "—", 25, function()
-        root:SetCollapsed(not root.collapsed)
-    end, preset)
-    collapse:SetPoint("RIGHT", close, "LEFT", -5, 0)
-    collapse:SetFrameLevel(root:GetFrameLevel() + 22)
-    collapse:SetHeight(24)
-    SetWindowButtonGlyph(collapse, "minimize_icon")
-    root.collapseButton = collapse
+    local close, collapse
+    if header and options.closeButton ~= false then
+        close = Styles:CreateButton(header, "X", 25, function() root:Hide() end, preset)
+        close:SetPoint("RIGHT", header, "RIGHT", -8, 0)
+        close:SetFrameLevel(root:GetFrameLevel() + 22)
+        close:SetHeight(24)
+        SetWindowButtonGlyph(close, "exit_icon")
+        root.closeButton = close
+    end
+    if header and options.collapseButton ~= false then
+        collapse = Styles:CreateButton(header, "—", 25, function()
+            root:SetCollapsed(not root.collapsed)
+        end, preset)
+        collapse:SetPoint("RIGHT", close or header, close and "LEFT" or "RIGHT", close and -5 or -8, 0)
+        collapse:SetFrameLevel(root:GetFrameLevel() + 22)
+        collapse:SetHeight(24)
+        SetWindowButtonGlyph(collapse, "minimize_icon")
+        root.collapseButton = collapse
+    end
 
-    heading:SetPoint("RIGHT", collapse, "LEFT", -8, 0)
+    if heading then
+        local anchor = collapse or close or header
+        local anchorPoint = (close or collapse) and "LEFT" or "RIGHT"
+        heading:SetPoint("RIGHT", anchor, anchorPoint, -8, 0)
+    end
     local function FitWindowTitle()
+        if not heading or not header then return end
         if (tonumber(heading:GetWidth()) or 0) <= 1 then return end
         local titleHeight = math.max(1, math.ceil(heading:GetStringHeight() or 1))
         local targetHeight = math.max(style.titleHeight, titleHeight + 4)
         if math.abs((header:GetHeight() or 0) - targetHeight) > 0.5 then
             header:SetHeight(targetHeight)
+            SetContentTitleSpacing(titleBarMode ~= "hover")
             if root.collapsed then root:SetHeight(targetHeight + 2) end
         end
     end
-    header:HookScript("OnSizeChanged", FitWindowTitle)
-    FitWindowTitle()
+    if header then
+        SetTitleBarHorizontalAnchors()
+        if titleBarWidthMode ~= "percent" or math.abs(titleBarWidthPercent - 100) >= 0.001 then
+            root:HookScript("OnSizeChanged", SetTitleBarHorizontalAnchors)
+        end
+        header:HookScript("OnSizeChanged", FitWindowTitle)
+        FitWindowTitle()
+    end
 
     -- Defer loading collapsed state until first Show, when the expanded
     -- geometry is resolved and TOPRIGHT can be captured precisely.
-    local initiallyCollapsed = state and state.windowCollapsed[key] == true
+    local initiallyCollapsed = header and options.collapseButton ~= false and state and state.windowCollapsed[key] == true
     root.collapsed = false
     root._initialCollapsePending = initiallyCollapsed
     root:SetScript("OnShow", function(self)

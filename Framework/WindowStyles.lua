@@ -252,9 +252,20 @@ function Styles:ApplyWindow(frame, state, presetName)
     local border = state == "drag" and style.borderDrag
         or state == "hover" and style.borderHover or style.border
     SetBackdrop(frame, style.background, border, style.edgeSize)
+    if frame._tbuSplitTitleAndBodyBorder then
+        -- The outer backdrop remains the body fill, while independent body
+        -- edges begin beneath the title bar's three-sided outline.
+        frame:SetBackdropBorderColor(0, 0, 0, 0)
+        for _, edge in ipairs((frame.windowBodyBorder and frame.windowBodyBorder.borderEdges) or {}) do
+            edge:SetVertexColor(unpack(border))
+        end
+    end
     if frame.windowHeader and frame.windowHeader.bg then
         local titleColor = state == "normal" and style.title or style.titleHover
         frame.windowHeader.bg:SetVertexColor(unpack(titleColor))
+        for _, edge in ipairs(frame.windowHeader.borderEdges or {}) do
+            edge:SetVertexColor(unpack(border))
+        end
     end
 end
 
