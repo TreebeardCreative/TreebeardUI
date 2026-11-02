@@ -136,6 +136,12 @@ local function PopupAwareContentHeight(host, dropdowns, naturalHeight, bottomPad
 end
 
 function PageHost:BindSections(host, definitions, opts)
+    -- New embedded pages pass only layout options: top-level Sections have
+    -- already registered themselves with the page host in creation order.
+    -- Keep accepting the old explicit definition list for existing consumers.
+    if opts == nil and type(definitions) == "table" and definitions[1] == nil then
+        opts, definitions = definitions, nil
+    end
     opts = opts or {}
     local style = TBU.WindowStyles and TBU.WindowStyles:GetForFrame(host.panel) or {}
     local sectionWidth = opts.sectionWidth
@@ -150,27 +156,46 @@ function PageHost:BindSections(host, definitions, opts)
     if contentTopPadding == nil then contentTopPadding = style.sectionCanvasTop end
     local contentBottomPadding = opts.contentBottomPadding
     if contentBottomPadding == nil then contentBottomPadding = style.sectionCanvasBottom end
-    local sections, rows = {}, {}
+    local sections, rows = host.sections or {}, {}
     local wrapSections = opts.wrapSections == true
-    for index, definition in ipairs(definitions or {}) do
-        local section = (type(definition) == "table" and rawget(definition, "section")) or definition
-        local id = definition.id or tostring(index)
-        if section:GetParent() ~= host.content then section:SetParent(host.content) end
-        sections[#sections + 1] = section
-        if not wrapSections then
+    if definitions then
+        -- Legacy explicit registration remains supported while consumers move
+        -- to automatic top-level registration.
+        for index = #sections, 1, -1 do sections[index] = nil end
+        for index, definition in ipairs(definitions) do
+            local section = (type(definition) == "table" and rawget(definition, "section")) or definition
+            local id = type(definition) == "table" and definition.id or nil
+            if section:GetParent() ~= host.content then section:SetParent(host.content) end
+            sections[#sections + 1] = section
+            if not wrapSections then
+                rows[#rows + 1] = TBU.SettingsLayout:PageSectionRow(
+                    host.layout, (opts.rowPrefix or host.pageId .. "-row-") .. index .. (opts.useIds and "-" .. (id or tostring(index)) or ""), section)
+            end
+        end
+    elseif not wrapSections then
+        for index, section in ipairs(sections) do
             rows[#rows + 1] = TBU.SettingsLayout:PageSectionRow(
-                host.layout, (opts.rowPrefix or host.pageId .. "-row-") .. index .. (opts.useIds and "-" .. id or ""), section)
+                host.layout, (opts.rowPrefix or host.pageId .. "-row-") .. index .. (opts.useIds and "-" .. tostring(section.layoutId or index) or ""), section)
         end
     end
     host.sections, host.rows = sections, rows
     -- Use the Retail client's native layout rounding for each complete page
     -- Section, including its control frames and border/background textures.
     -- Guard the newer API so other client profiles retain their prior behavior.
-    for _, section in ipairs(sections) do
-        EnableNativePixelRounding(section)
-    end
     local dropdowns = {}
-    for _, section in ipairs(sections) do GatherDropdowns(section, dropdowns) end
+    local function QueueMeasure()
+        if host.ScheduleMeasure then host.ScheduleMeasure() end
+    end
+    local function TrackSection(section)
+        EnableNativePixelRounding(section)
+        GatherDropdowns(section, dropdowns)
+        if section._tbuPageHostVisibilityHook ~= host then
+            section._tbuPageHostVisibilityHook = host
+            section:HookScript("OnShow", QueueMeasure)
+            section:HookScript("OnHide", QueueMeasure)
+        end
+    end
+    for _, section in ipairs(sections) do TrackSection(section) end
     local function Measure()
         -- Blizzard canvas width can be unresolved before first OnShow.
         if opts.legacyMain then
@@ -218,6 +243,15 @@ function PageHost:BindSections(host, definitions, opts)
     end
     host.Measure = Measure
     host.ScheduleMeasure = TBU.SettingsPageMeasure:Create(host.panel, Measure, {passes=wrapSections and 1 or 4})
+    host._tbuPageSectionRegistered = function(section)
+        TrackSection(section)
+        if not wrapSections then
+            local index = #rows + 1
+            rows[#rows + 1] = TBU.SettingsLayout:PageSectionRow(
+                host.layout, (opts.rowPrefix or host.pageId .. "-row-") .. index .. (opts.useIds and "-" .. tostring(section.layoutId or index) or ""), section)
+        end
+        QueueMeasure()
+    end
     if wrapSections then
         -- Window resizing changes the viewport mid-frame. Do not reflow
         -- sections against an intermediate width before the root finishes its
@@ -270,8 +304,18 @@ function PageHost:CreateEmbedded(parent, pageId)
     -- Section placement padding is measured separately in BindSections.
     local scroll, content, scrollbar = CreateScroll(parent, 0, 0, true, nil, 0)
     local layout = TBU.SettingsLayout:Page(content, pageId, {padding=0})
-    return {panel=parent, scroll=scroll, content=content,
+    local host = {panel=parent, scroll=scroll, content=content,
         scrollbar=scrollbar, layout=layout, pageId=pageId, rows={}, sections={}}
+    content._tbuPageSectionCreated = function(_, section)
+        for _, existing in ipairs(host.sections) do
+            if existing == section then return end
+        end
+        host.sections[#host.sections + 1] = section
+        if host._tbuPageSectionRegistered then
+            host._tbuPageSectionRegistered(section)
+        end
+    end
+    return host
 end
 
 -- Placeholder pages use the same scroll infrastructure as the live

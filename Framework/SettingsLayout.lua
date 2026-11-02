@@ -298,6 +298,12 @@ function L:Section(parent, id, opts)
     if parent and parent.layoutKind then
         RegisterChild(parent, section, { role = "section", flow = opts.flow ~= false, gapBefore = opts.gapBefore })
     end
+    -- A Section created directly under an embedded page's content frame is a
+    -- top-level page Section. The page host owns its ordered reflow list; a
+    -- nested Section has a different parent and stays in its parent's flow.
+    if parent and type(parent._tbuPageSectionCreated) == "function" then
+        parent:_tbuPageSectionCreated(section)
+    end
     return section
 end
 
