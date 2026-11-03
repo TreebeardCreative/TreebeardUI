@@ -22,14 +22,17 @@ end
 
 local function CreateScroll(parent, topOffset, bottomInset, withScrollbar, themeMode, leftInset)
     local scroll = CreateFrame("ScrollFrame", nil, parent)
+    local rightInset = withScrollbar and TBU.SettingsControls.ScrollbarGutterWidth or 0
+    scroll._tbuRightGutter = rightInset
+    scroll._tbuLeftInset = leftInset == nil and 8 or leftInset
     scroll:EnableMouseWheel(true)
     scroll:SetScript("OnMouseWheel", function(self, delta)
         local current = self:GetVerticalScroll() or 0
         local range = self:GetVerticalScrollRange() or 0
         self:SetVerticalScroll(math.max(0, math.min(range, current - delta * 35)))
     end)
-    scroll:SetPoint("TOPLEFT", parent, "TOPLEFT", leftInset == nil and 8 or leftInset, -topOffset)
-    scroll:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -TBU.SettingsControls.ScrollbarGutterWidth, bottomInset)
+    scroll:SetPoint("TOPLEFT", parent, "TOPLEFT", scroll._tbuLeftInset, -topOffset)
+    scroll:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -rightInset, bottomInset)
     local scrollbar
     if withScrollbar then
         scrollbar = TBU.SettingsControls:AttachScrollbar(parent, scroll, themeMode or "gold")
@@ -89,7 +92,8 @@ function PageHost:CreateCanvas(name, description, pageId, opts)
         local topOffset = math.max(58, 16 + titleHeight + (descHeight > 0 and 6 + descHeight + 6 or 0))
         scroll:ClearAllPoints()
         scroll:SetPoint("TOPLEFT", panel, "TOPLEFT", 8, -topOffset)
-        scroll:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -TBU.SettingsControls.ScrollbarGutterWidth, 8)
+        scroll:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT",
+            -TBU.SettingsControls.ScrollbarGutterWidth, 8)
     end
     panel:HookScript("OnSizeChanged", FitCanvasHeader)
     FitCanvasHeader()
@@ -201,9 +205,10 @@ function PageHost:BindSections(host, definitions, opts)
         if opts.legacyMain then
             for _, section in ipairs(sections) do TBU.SettingsLayout:ReflowSection(section) end
         end
-        local width = tonumber(host.scroll:GetWidth()) or 0
+        local width = math.max(1, tonumber(host.scroll:GetWidth()) or 0)
         if width <= 1 then
-            width = tonumber((opts.legacyMain and host.layout or host.panel):GetWidth()) or 0
+            width = math.max(1, (tonumber((opts.legacyMain and host.layout or host.panel):GetWidth()) or 0)
+                - (host.scroll._tbuLeftInset or 0) - (host.scroll._tbuRightGutter or 0))
         end
         if width <= 1 then return end
         host.content:SetWidth(width)
@@ -323,7 +328,7 @@ end
 function PageHost:CreatePreviewViewport(parent)
     local scroll, content, scrollbar = CreateScroll(parent, 0, 0, true, nil, 0)
     local function Update()
-        local width = tonumber(scroll:GetWidth()) or 0
+        local width = math.max(1, tonumber(scroll:GetWidth()) or 0)
         if width <= 1 then return end
         content:SetWidth(width)
         if content.previewText then content.previewText:SetWidth(math.max(100, width - 20)) end

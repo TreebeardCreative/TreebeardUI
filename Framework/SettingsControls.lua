@@ -999,26 +999,23 @@ CreateSettingsScrollbar = function(parent, scrollFrame, button, themeMode)
     return bar
 end
 
--- The reserved scrollbar gutter belongs to its scrollable pane, including
--- visually empty clearance on BOTH sides of the scrollbar.  ScrollBarGap and
--- positioning are framework-owned; consumers only place scrollable panes.
-SC.ScrollbarGutterWidth = 30
+-- Scrollbars occupy a right-side layout lane. Keep a small content gap before
+-- the bar and a separate inset between its track and the pane's outer edge.
 SC.ScrollbarRightInset = 4
+SC.ScrollbarContentGap = 6
+SC.ScrollbarGutterWidth = SC.ScrollbarRightInset
+    + DropdownMetrics.SCROLLBAR_WIDTH + SC.ScrollbarContentGap
 
 -- Public shared scrollbar wrapper for Settings pages and future scrollable content.
 -- Scrolling is native; only the arrows/track/thumb belong to framework.
 function SC:AttachScrollbar(parent, scrollFrame, themeMode)
     local bar = CreateSettingsScrollbar(parent, scrollFrame, nil, themeMode or "gold")
-    -- Align chrome to the RIGHT edge of its own pane (small inset for border).
-    -- The visible bar remains distinct from the full-width, invisible wheel
-    -- gutter. Dropdown popups use their independent scrollbar placement.
+    -- The scroll viewport reserves a right-side lane. Place the bar in that
+    -- lane, separated from the viewport by ScrollbarContentGap.
     local gutterWidth = SC.ScrollbarGutterWidth
-    local barOffset = gutterWidth - SC.ScrollbarRightInset - DropdownMetrics.SCROLLBAR_WIDTH
+    local barOffset = SC.ScrollbarContentGap
     bar:SetPoint("TOPLEFT", scrollFrame, "TOPRIGHT", barOffset, 0)
     bar:SetPoint("BOTTOMLEFT", scrollFrame, "BOTTOMRIGHT", barOffset, 0)
-    -- Empty right-hand clearance must scroll even when the pointer is not
-    -- over the 16-unit scrollbar itself. Match the viewport's vertical bounds,
-    -- without moving its content or stealing events from its sections.
     local wheelGutter = CreateFrame("Frame", nil, parent)
     wheelGutter:SetPoint("TOPLEFT", scrollFrame, "TOPRIGHT", 0, 0)
     wheelGutter:SetPoint("BOTTOMRIGHT", scrollFrame, "BOTTOMRIGHT", gutterWidth, 0)
@@ -1037,19 +1034,49 @@ function SC:AttachScrollbar(parent, scrollFrame, themeMode)
         if bar:IsShown() then bar:Update() end
     end)
     bar.wheelGutter = wheelGutter
-    local function refresh()
+    local function refreshNow()
         bar:RefreshLayer()
         local scrollable = scrollFrame:GetVerticalScrollRange() or 0
         if scrollable > 1 then
-            bar:Show()
+            if not bar:IsShown() then bar:Show() end
             bar:Update()
         else
-            bar:Hide()
+            if bar:IsShown() then bar:Hide() end
         end
     end
-    scrollFrame:HookScript("OnSizeChanged", refresh)
-    scrollFrame:HookScript("OnShow", refresh)
-    bar.RefreshVisibility = refresh
+
+    -- Scroll range can be transient while the root window, viewport, and
+    -- scroll child are resolving a resize. Coalesce visibility checks until
+    -- the next frame so one intermediate range cannot flash the bar on/off.
+    local visibilityUpdate = CreateFrame("Frame", nil, parent)
+    visibilityUpdate:Hide()
+    local candidateVisibility, stableMeasurements = nil, 0
+    visibilityUpdate:SetScript("OnUpdate", function(self)
+        self:Hide()
+        bar:RefreshLayer()
+        local scrollable = (scrollFrame:GetVerticalScrollRange() or 0) > 1
+        if scrollable == candidateVisibility then
+            stableMeasurements = stableMeasurements + 1
+        else
+            candidateVisibility = scrollable
+            stableMeasurements = 1
+        end
+        -- Keep the current state through a one-frame intermediate range.
+        -- Require two settled measurements before changing visibility.
+        if stableMeasurements < 2 then
+            if bar:IsShown() then bar:Update() end
+            self:Show()
+            return
+        end
+        refreshNow()
+    end)
+    local function scheduleRefresh()
+        if not visibilityUpdate:IsShown() then visibilityUpdate:Show() end
+    end
+    scrollFrame:HookScript("OnSizeChanged", scheduleRefresh)
+    scrollFrame:HookScript("OnShow", scheduleRefresh)
+    bar.RefreshVisibility = scheduleRefresh
+    scheduleRefresh()
     return bar
 end
 

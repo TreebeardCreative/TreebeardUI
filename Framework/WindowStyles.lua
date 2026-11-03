@@ -108,7 +108,7 @@ Styles.Presets.warm_warcraft = {
     contentSectionWidth = 540,
     sectionColumnGap = 6,
     settingsSize = {821, 620, 821, 620},
-    debugSize = {710, 395, 530, 290},
+    debugSize = {710, 395},
     edgeInside = 6,
     edgeOutside = 5,
 }
