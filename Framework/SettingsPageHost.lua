@@ -97,7 +97,7 @@ function PageHost:CreateCanvas(name, description, pageId, opts)
     end
     panel:HookScript("OnSizeChanged", FitCanvasHeader)
     FitCanvasHeader()
-    local layout = TBU.SettingsLayout:Page(content, pageId, { padding = 0 })
+    local layout = TBU.SettingsLayout:Container(content, pageId, { padding = 0 })
     local host = { panel=panel, scroll=scroll, content=content,
         scrollbar=scrollbar, layout=layout, pageId=pageId, rows={}, sections={} }
     return host
@@ -217,8 +217,8 @@ function PageHost:BindSections(host, definitions, opts)
         host.layout:SetWidth(width)
         if wrapSections then
             -- Page-level adaptive placement; entire Sections stay intact.
-            -- The native Blizzard host continues through ReflowPage below.
-            local height = TBU.SettingsLayout:FlowPageSections(host.layout, sections, {
+            -- The native Blizzard host continues through ReflowContainer below.
+            local height = TBU.SettingsLayout:FlowContainerSections(host.layout, sections, {
                 width=width,
                 sectionWidth=sectionWidth,
                 columnGap=columnGap,
@@ -239,7 +239,7 @@ function PageHost:BindSections(host, definitions, opts)
                 TBU.SettingsLayout:ReflowSection(section)
             end
         end
-        local height = TBU.SettingsLayout:ReflowPage(host.layout, rows, {
+        local height = TBU.SettingsLayout:ReflowContainer(host.layout, rows, {
             width=width, padding=0, gap=TBU.SettingsLayout.Metrics.SECTION_GAP,
         })
         host.content:SetHeight(PopupAwareContentHeight(host, dropdowns, height or 1, 18))
@@ -308,7 +308,7 @@ function PageHost:CreateEmbedded(parent, pageId)
     -- The scroll viewport itself is flush with its shared header/footer.
     -- Section placement padding is measured separately in BindSections.
     local scroll, content, scrollbar = CreateScroll(parent, 0, 0, true, nil, 0)
-    local layout = TBU.SettingsLayout:Page(content, pageId, {padding=0})
+    local layout = TBU.SettingsLayout:Container(content, pageId, {padding=0})
     local host = {panel=parent, scroll=scroll, content=content,
         scrollbar=scrollbar, layout=layout, pageId=pageId, rows={}, sections={}}
     content._tbuPageSectionCreated = function(_, section)

@@ -69,7 +69,6 @@ Styles.Presets.warm_warcraft = {
     buttonSelectedBorder = {0.76863, 0.60392, 0.27059, 1.00}, -- #C49A45
     buttonSelectedText = {0.94118, 0.90588, 0.84314, 1.00}, -- #F0E7D7; same as text, independent role
     resizeGripIdle = {0.72549, 0.66667, 0.56863, 1.00}, -- #B9AA91; same as muted, independent role
-    resizeHighlight = {0.88235, 0.72157, 0.24706, 0.20}, -- #E1B83F
 
     -- Buttons, fields, and scrolling controls
     button = {0.18824, 0.15686, 0.12941, 1.00}, -- #302820
@@ -85,7 +84,13 @@ Styles.Presets.warm_warcraft = {
     -- Shared geometry; each value is explicit for future standalone use
     edgeSize = 1,
     titleHeight = 29,
+    -- Empty pane headers keep only this compact structural minimum; populated
+    -- headers measure their text or layout row plus the configured insets.
+    paneHeaderMinHeight = 15,
+    -- Retained as the explicit fixed-height fallback when auto sizing is off.
     paneHeaderHeight = 62,
+    -- Structural outer-width floor for empty or populated panes in content-sized windows.
+    paneMinimumWidth = 15,
     paneFooterHeight = 1,
     paneFooterPaddingX = 12,
     paneFooterPaddingY = 6,
@@ -262,10 +267,10 @@ function Styles:ApplyWindow(frame, state, presetName)
             edge:SetVertexColor(unpack(border))
         end
     end
-    if frame.windowHeader and frame.windowHeader.bg then
+    if frame.frameHeader and frame.frameHeader.bg then
         local titleColor = state == "normal" and style.title or style.titleHover
-        frame.windowHeader.bg:SetVertexColor(unpack(titleColor))
-        for _, edge in ipairs(frame.windowHeader.borderEdges or {}) do
+        frame.frameHeader.bg:SetVertexColor(unpack(titleColor))
+        for _, edge in ipairs(frame.frameHeader.borderEdges or {}) do
             edge:SetVertexColor(unpack(border))
         end
     end

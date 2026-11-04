@@ -113,8 +113,13 @@ local function RegisterChild(parent, child, opts)
     child.layoutParent = parent
     child.layoutRole = opts.role or child.layoutRole or "content"
     child.layoutGapBefore = opts.gapBefore
-    child.layoutParticipatesInFlow = opts.flow == true
+    -- Registered children flow in creation order by default. Callers can
+    -- reserve a child outside the flow with flow=false.
+    child.layoutParticipatesInFlow = opts.flow ~= false
     table.insert(parent.layoutChildren, child)
+    if child.layoutParticipatesInFlow and type(parent._tbuRequestLayout) == "function" then
+        parent:_tbuRequestLayout()
+    end
     return child
 end
 
@@ -143,6 +148,9 @@ function L:SetFlowChild(parent, child, role, gapBefore)
     child.layoutRole = role or child.layoutRole or "content"
     child.layoutGapBefore = gapBefore
     child.layoutParticipatesInFlow = true
+    if type(parent._tbuRequestLayout) == "function" then
+        parent:_tbuRequestLayout()
+    end
     return child
 end
 
@@ -295,7 +303,7 @@ function L:Section(parent, id, opts)
     end
 
     self:PrepareOrdinarySection(section)
-    if parent and parent.layoutKind then
+    if parent and (parent.layoutKind or type(parent._tbuPageSectionCreated) ~= "function") then
         RegisterChild(parent, section, { role = "section", flow = opts.flow ~= false, gapBefore = opts.gapBefore })
     end
     -- A Section created directly under an embedded page's content frame is a
@@ -356,28 +364,37 @@ function L:MainHeader(section, text, opts)
     return header, label
 end
 
-function L:Note(section, text, opts)
+local function CreateLayoutText(section, text, opts, textRole, defaultFont, layoutRole)
     opts = opts or {}
-    local note = section:CreateFontString(nil, "ARTWORK", opts.fontObject or "GameFontDisableSmall")
-    -- Notes placed directly in Columns should fill the Column and wrap by
-    -- default. Consumers can pass wrap=false for intentionally fixed-width text.
-    note.layoutWrap = opts.wrap ~= false
-    note:SetJustifyH(opts.justifyH or "CENTER")
-    note:SetJustifyV("TOP")
-    note:SetWordWrap(opts.wrap ~= false)
-    if note.SetNonSpaceWrap then note:SetNonSpaceWrap(opts.wrap ~= false) end
-    note:SetText(text or "")
+    local textString = section:CreateFontString(nil, "ARTWORK", opts.fontObject or defaultFont)
+    -- Text added to a layout parent fills its layout width and wraps by
+    -- default. Consumers can pass wrap=false for fixed-width text.
+    textString.layoutWrap = opts.wrap ~= false
+    textString:SetJustifyH(opts.justifyH or "CENTER")
+    textString:SetJustifyV("TOP")
+    textString:SetWordWrap(opts.wrap ~= false)
+    if textString.SetNonSpaceWrap then textString:SetNonSpaceWrap(opts.wrap ~= false) end
+    textString:SetText(text or "")
     if TBU.WindowStyles then
-        local function repaintNote(target)
-            target:SetTextColor(unpack(TBU.WindowStyles:GetTextColor("notes", target)))
+        local function repaintText(target)
+            target:SetTextColor(unpack(TBU.WindowStyles:GetTextColor(textRole, target)))
         end
-        TBU.WindowStyles:RegisterVisual(note, repaintNote)
-        repaintNote(note)
+        TBU.WindowStyles:RegisterVisual(textString, repaintText)
+        repaintText(textString)
     end
     local gapBefore = opts.gapBefore
     if gapBefore == nil then gapBefore = L.Metrics.CONTENT_GAP end
-    RegisterChild(section, note, { role = "note", gapBefore = gapBefore, flow = true })
-    return note
+    RegisterChild(section, textString, { role = layoutRole, gapBefore = gapBefore, flow = true })
+    return textString
+end
+
+function L:Note(section, text, opts)
+    return CreateLayoutText(section, text, opts, "notes", "GameFontDisableSmall", "note")
+end
+
+-- Primary-colored paragraph/text content. Use Note for muted supporting copy.
+function L:Text(section, text, opts)
+    return CreateLayoutText(section, text, opts, "primary", "GameFontHighlightSmall", "content")
 end
 
 function L:ReflowSection(section)
@@ -469,8 +486,8 @@ local function Node(parent, kind, id, opts)
     f.layoutPadding = opts.padding
     if f.layoutPadding == nil then f.layoutPadding = (kind == "box") and DEFAULT_PADDING or 0 end
     f.layoutChildren = {}
-    if parent and parent.layoutKind then
-        RegisterChild(parent, f, { role = kind, flow = opts.flow == true, gapBefore = opts.gapBefore })
+    if parent then
+        RegisterChild(parent, f, { role = kind, flow = opts.flow ~= false, gapBefore = opts.gapBefore })
     end
     return f
 end
@@ -560,7 +577,7 @@ function L:Columns(row, count, ids, opts)
         elseif type(opts.alignments) == "table" and opts.alignments[i] then
             columnHorizontalAlign = opts.alignments[i]
         end
-        cols[i] = Node(row, "column", id, { gap=contentGap, padding=0 })
+        cols[i] = Node(row, "column", id, { gap=contentGap, padding=0, flow=false })
         local columnPadding = opts.padding
         if type(opts.paddings) == "table" and opts.paddings[i] ~= nil then
             columnPadding = opts.paddings[i]
@@ -709,15 +726,21 @@ function L:GetColumnHorizontalAnchor(column)
     return "CENTER"
 end
 
-function L:AdoptContent(column, content, opts)
-    if not column or not content then return content end
+function L:AdoptContent(parent, content, opts)
+    if not parent or not content then return content end
     opts = opts or {}
     content.layoutKind = content.layoutKind or "content"
     content.layoutFillWidth = opts.fillWidth == true
     content.layoutMaxWidth = tonumber(opts.maxWidth) or nil
     content.layoutWrap = opts.wrap == true
     content.layoutMeasureHeight = opts.measureHeight or content.layoutMeasureHeight
-    return self:SetFlowChild(column, content, opts.role or content.layoutRole or "content", opts.gapBefore)
+    return self:SetFlowChild(parent, content, opts.role or content.layoutRole or "content", opts.gapBefore)
+end
+
+-- Generic spelling for content adopted by a Row, Column, layout Container,
+-- or a consumer-owned Frame. AdoptContent remains as a compatibility alias.
+function L:AddContent(parent, content, opts)
+    return self:AdoptContent(parent, content, opts)
 end
 
 function L:MeasureContent(content)
@@ -736,11 +759,97 @@ end
 function L:LayoutRow(row, width)
     if not row then return end
     if not row.layoutColumns or not row.LayoutColumns then
-        -- Explicit empty Rows still participate in flow at the same minimum
-        -- height as populated Rows; otherwise alignment guides cannot rely
-        -- on reserved empty slots.
-        row.layoutColumns = row.layoutColumns or {}
-        return self:MeasureRow(row)
+        -- A Row may contain content directly. When no Columns are declared,
+        -- place its flow children left-to-right in creation order and measure
+        -- the tallest child. Columns remain optional for simple one-line rows.
+        width = math.max(1, tonumber(width) or row:GetWidth() or 1)
+        local pixel = LayoutPixel(row)
+        width = math.max(pixel, FloorGrid(width, pixel))
+        SetWidthIfChanged(row, width)
+        local padding = NormalizeLayoutPadding(row.layoutPadding, 0)
+        local children, fixedWidth, fillCount, totalGap = {}, 0, 0, 0
+        for _, child in ipairs(row.layoutChildren or {}) do
+            if child:IsShown() and child.layoutParticipatesInFlow then
+                children[#children + 1] = child
+                if child.layoutFillWidth then
+                    fillCount = fillCount + 1
+                else
+                    local childWidth = tonumber(child.layoutPreferredWidth)
+                        or (child.GetWidth and tonumber(child:GetWidth())) or 1
+                    if child.GetObjectType and child:GetObjectType() == "FontString"
+                        and child.GetStringWidth then
+                        childWidth = math.max(childWidth, tonumber(child:GetStringWidth()) or 1)
+                    end
+                    fixedWidth = fixedWidth + math.max(pixel, childWidth)
+                end
+                if #children > 1 then
+                    totalGap = totalGap + math.max(0, tonumber(child.layoutGapBefore)
+                        or row.layoutGap or L.Metrics.ROW_GAP)
+                end
+            end
+        end
+
+        if #children == 0 then
+            row.layoutDirectContentHeight = 0
+            return self:MeasureRow(row)
+        end
+
+        local innerWidth = math.max(pixel, width - padding.left - padding.right)
+        local fillWidth = fillCount > 0 and math.max(pixel,
+            (innerWidth - fixedWidth - totalGap) / fillCount) or nil
+        local remaining = math.max(0, innerWidth - fixedWidth - totalGap - (fillWidth or 0) * fillCount)
+        local horizontal = NormalizeHorizontalAlign(row.layoutHorizontalAlign)
+        local x = padding.left + (horizontal == "RIGHT" and remaining
+            or (horizontal == "CENTER" and remaining / 2 or 0))
+        local placements, tallest = {}, 0
+        for index, child in ipairs(children) do
+            if index > 1 then
+                x = x + math.max(0, tonumber(child.layoutGapBefore)
+                    or row.layoutGap or L.Metrics.ROW_GAP)
+            end
+            local childWidth
+            if child.layoutFillWidth then
+                childWidth = fillWidth
+            else
+                childWidth = tonumber(child.layoutPreferredWidth)
+                    or (child.GetWidth and tonumber(child:GetWidth())) or 1
+                if child.GetObjectType and child:GetObjectType() == "FontString"
+                    and child.GetStringWidth then
+                    childWidth = math.max(childWidth, tonumber(child:GetStringWidth()) or 1)
+                    if child.layoutWrap then
+                        childWidth = math.min(childWidth, math.max(pixel, innerWidth - totalGap))
+                    end
+                end
+            end
+            childWidth = math.max(pixel, FloorGrid(childWidth, pixel))
+            if child.layoutMaxWidth then childWidth = math.min(childWidth, child.layoutMaxWidth) end
+            if child.SetWidth then SetWidthIfChanged(child, childWidth) end
+            if child.UpdateLabelGeometry then child:UpdateLabelGeometry() end
+            if child.layoutKind == "row" then
+                self:LayoutRow(child, childWidth)
+            elseif child.layoutKind == "section" then
+                SetWidthIfChanged(child, childWidth)
+                self:ReflowSection(child)
+            end
+            local childHeight = self:MeasureContent(child)
+            tallest = math.max(tallest, childHeight)
+            placements[#placements + 1] = {child=child, x=x, height=childHeight}
+            x = x + childWidth
+        end
+
+        local naturalHeight = tallest + padding.top + padding.bottom
+        local rowHeight = math.max(row.layoutMinHeight or L.Metrics.ROW_MIN_HEIGHT, naturalHeight)
+        SetHeightIfChanged(row, rowHeight)
+        local freeHeight = math.max(0, rowHeight - naturalHeight)
+        local vertical = self:GetRowVerticalAnchor(row)
+        local yOffset = vertical == "BOTTOM" and freeHeight
+            or (vertical == "CENTER" and freeHeight / 2 or 0)
+        for _, placement in ipairs(placements) do
+            SetAnchorsIfChanged(placement.child, {{"TOPLEFT", row, "TOPLEFT",
+                placement.x, -(padding.top + yOffset)}})
+        end
+        row.layoutDirectContentHeight = naturalHeight
+        return rowHeight
     end
 
     width = math.max(1, tonumber(width) or row:GetWidth() or 1)
@@ -861,12 +970,12 @@ end
 -- many full Section columns can fit at the preferred width and wraps to a new
 -- row when necessary. This keeps Section -> Row -> Column -> Content intact
 -- while removing the previous hard two-column ceiling.
-function L:FlowPageSections(page, sections, opts)
+function L:FlowContainerSections(container, sections, opts)
     opts = opts or {}
-    local width = math.max(1, tonumber(opts.width) or page:GetWidth() or 1)
+    local width = math.max(1, tonumber(opts.width) or container:GetWidth() or 1)
     -- Optional content-width packing. Each Section still reflows through the
     -- standard Section -> Row -> Column -> Content measurement contract; the
-    -- page only positions complete, measured Sections in available rows.
+    -- container only positions complete, measured Sections in available rows.
     -- Content-width packing remains a separate opt-in arrangement.
     if opts.fitContentWidths then
         local left = math.max(0, tonumber(opts.left) or 0)
@@ -886,7 +995,7 @@ function L:FlowPageSections(page, sections, opts)
                 if x > 0 and x + sectionWidth > available then
                     x, y, rowHeight = 0, y + rowHeight + rowGap, 0
                 end
-                SetAnchorsIfChanged(section, {{"TOPLEFT", page, "TOPLEFT", left + x, -y}})
+                SetAnchorsIfChanged(section, {{"TOPLEFT", container, "TOPLEFT", left + x, -y}})
                 x = x + sectionWidth + columnGap
                 rowHeight = math.max(rowHeight, sectionHeight)
             else
@@ -895,10 +1004,10 @@ function L:FlowPageSections(page, sections, opts)
             end
         end
         local totalHeight = y + rowHeight
-        SetHeightIfChanged(page, math.max(1, totalHeight))
+        SetHeightIfChanged(container, math.max(1, totalHeight))
         return totalHeight
     end
-    local pixel = LayoutPixel(page)
+    local pixel = LayoutPixel(container)
     local preferred = math.max(pixel, FloorGrid(math.max(100, tonumber(opts.sectionWidth) or 590), pixel))
     local columnGap = CeilGrid(math.max(0, tonumber(opts.columnGap) or L.Metrics.PAGE_SECTION_GAP), pixel)
     local rowGap = CeilGrid(math.max(0, tonumber(opts.rowGap) or L.Metrics.PAGE_SECTION_GAP), pixel)
@@ -956,7 +1065,7 @@ function L:FlowPageSections(page, sections, opts)
             end
             local x = left + (column - 1) * (sectionWidth + columnGap)
             local y = bandTop + (columnUsed > 0 and columnUsed + rowGap or 0)
-            SetAnchorsIfChanged(section, {{"TOPLEFT", page, "TOPLEFT", x, -y}})
+            SetAnchorsIfChanged(section, {{"TOPLEFT", container, "TOPLEFT", x, -y}})
             columnUsed = (columnUsed > 0 and columnUsed + rowGap or 0) + height
         else
             if section:GetNumPoints() > 0 then section:ClearAllPoints() end
@@ -965,17 +1074,16 @@ function L:FlowPageSections(page, sections, opts)
     end
 
     local contentHeight = hasBand and (bandTop + bandHeight) or top
-    SetHeightIfChanged(page, math.max(1, contentHeight))
+    SetHeightIfChanged(container, math.max(1, contentHeight))
     return contentHeight
 end
 
--- A page uses the same Row -> Column -> Child relationship as the inside of a
--- section. Major sections are therefore not a separate positioning system:
--- each one is simply the child of a one-column page row.
-function L:Page(parent, id, opts)
-    local page = Node(parent, "page", id, opts or {})
-    page.layoutPadding = (opts and opts.padding) or 0
-    return page
+-- A layout container can live in a frame, pane, or switchable container. Page
+-- selection belongs to the host; this node only measures and flows content.
+function L:Container(parent, id, opts)
+    local container = Node(parent, "container", id, opts or {})
+    container.layoutPadding = (opts and opts.padding) or 0
+    return container
 end
 
 function L:AdoptChild(parent, child, opts)
@@ -992,7 +1100,7 @@ function L:AdoptChild(parent, child, opts)
     return RegisterChild(parent, child, {
         role = opts.role or child.layoutRole or child.layoutKind or "content",
         gapBefore = opts.gapBefore,
-        flow = opts.flow == true,
+        flow = opts.flow ~= false,
     })
 end
 
@@ -1006,17 +1114,127 @@ function L:PageSectionRow(page, id, section)
     return row
 end
 
-function L:ReflowPage(page, rows, opts)
+-- Reflow directly registered content in any Frame. A Row and Column are useful
+-- structure, but neither is required for a simple creation-order content stack.
+function L:ReflowFrame(frame, opts)
+    if not frame then return 0 end
     opts = opts or {}
-    local width = math.max(1, tonumber(opts.width) or page:GetWidth() or 1)
-    SetWidthIfChanged(page, width)
+    local width = tonumber(opts.width) or (frame.GetWidth and frame:GetWidth())
+    if not width or width <= 1 then return 0 end
+    width = math.max(1, width)
+    SetWidthIfChanged(frame, width)
+    local padding = NormalizeLayoutPadding(opts.padding ~= nil and opts.padding
+        or frame.layoutPadding or 0, 0)
+    local gap = math.max(0, tonumber(opts.gap) or frame.layoutGap or L.Metrics.ROW_GAP)
+    local innerWidth = math.max(1, width - padding.left - padding.right)
+    local children = opts.children or frame.layoutChildren or {}
+    local previous
+    local totalHeight = padding.top
+
+    for _, child in ipairs(children) do
+        if child and child:IsShown() and (child.layoutParticipatesInFlow
+            or child.layoutKind == "row" or child.layoutKind == "column"
+            or child.layoutKind == "container" or child.layoutKind == "section") then
+            local childGap = previous and math.max(0, tonumber(child.layoutGapBefore) or gap) or 0
+            totalHeight = totalHeight + childGap
+            local childWidth = innerWidth
+            if child.layoutFillWidth == false and child.layoutKind ~= "row"
+                and child.layoutKind ~= "section" and child.layoutKind ~= "column"
+                and child.layoutKind ~= "container" then
+                childWidth = tonumber(child.layoutPreferredWidth)
+                    or (child.GetWidth and tonumber(child:GetWidth())) or innerWidth
+                if child.GetObjectType and child:GetObjectType() == "FontString"
+                    and child.layoutWrap then childWidth = innerWidth end
+                childWidth = math.max(1, math.min(innerWidth, childWidth))
+            end
+            if child.SetWidth then SetWidthIfChanged(child, childWidth) end
+            if child.layoutKind == "row" then
+                self:LayoutRow(child, childWidth)
+            elseif child.layoutKind == "section" then
+                self:ReflowSection(child)
+            elseif child.layoutKind == "column" or child.layoutKind == "container" then
+                self:ReflowFrame(child, {width=childWidth, autoSize=true})
+            elseif child.layoutWrap and child.GetObjectType
+                and child:GetObjectType() == "FontString" then
+                child:SetWordWrap(true)
+                if child.SetNonSpaceWrap then child:SetNonSpaceWrap(true) end
+            end
+
+            local anchor = self:GetColumnHorizontalAnchor(frame)
+            local x = padding.left
+            if anchor == "RIGHT" then x = width - padding.right - childWidth
+            elseif anchor == "CENTER" then x = padding.left + (innerWidth - childWidth) / 2 end
+            SetAnchorsIfChanged(child, {{"TOPLEFT", frame, "TOPLEFT", x, -totalHeight}})
+            totalHeight = totalHeight + math.max(1, self:MeasureContent(child))
+            previous = child
+        end
+    end
+
+    totalHeight = totalHeight + padding.bottom
+    if opts.autoSize == true or (opts.autoSize == nil and frame.layoutKind == "container") then
+        SetHeightIfChanged(frame, math.max(1, totalHeight))
+    end
+    return totalHeight
+end
+
+-- Opt an existing WoW Frame into direct creation-order layout. Content can be
+-- adopted straight into this frame; additions and frame resizes schedule a
+-- coalesced reflow after the current geometry pass. Consumers can call
+-- frame:RequestContentLayout() after changing content that affects its measured size.
+function L:EnableFrameLayout(frame, opts)
+    if not frame then return nil end
+    opts = opts or {}
+    frame.layoutKind = frame.layoutKind or "frame"
+    frame.layoutChildren = frame.layoutChildren or {}
+    if opts.padding ~= nil then frame.layoutPadding = opts.padding end
+    if opts.gap ~= nil then frame.layoutGap = opts.gap end
+    if opts.horizontalAlign ~= nil then frame.layoutHorizontalAlign = opts.horizontalAlign end
+    frame._tbuFrameLayoutOptions = opts
+
+    if not frame._tbuLayoutUpdate then
+        local update = CreateFrame("Frame", nil, frame)
+        update:Hide()
+        update:SetScript("OnUpdate", function(self)
+            self:Hide()
+            L:ReflowFrame(frame, frame._tbuFrameLayoutOptions)
+        end)
+        frame._tbuLayoutUpdate = update
+        frame._tbuRequestLayout = function()
+            if frame._tbuLayoutUpdate and not frame._tbuLayoutUpdate:IsShown() then
+                frame._tbuLayoutUpdate:Show()
+            end
+        end
+        frame:HookScript("OnSizeChanged", frame._tbuRequestLayout)
+        frame.RequestContentLayout = function(self)
+            if self._tbuRequestLayout then self:_tbuRequestLayout() end
+        end
+    end
+
+    frame:_tbuRequestLayout()
+    return frame
+end
+
+function L:ReflowColumn(column, opts)
+    opts = opts or {}
+    opts.autoSize = opts.autoSize ~= false
+    return self:ReflowFrame(column, opts)
+end
+
+function L:ReflowContainer(container, rows, opts)
+    opts = opts or {}
+    if rows == nil then
+        opts.autoSize = opts.autoSize ~= false
+        return self:ReflowFrame(container, opts)
+    end
+    local width = math.max(1, tonumber(opts.width) or container:GetWidth() or 1)
+    SetWidthIfChanged(container, width)
 
     for _, row in ipairs(rows or {}) do
         SetWidthIfChanged(row, width)
         row:LayoutColumns(width)
         local section = row.layoutSection
         local column = row.layoutSectionColumn
-        -- Conditional page Sections control their wrapper Row visibility.
+        -- Conditional container Sections control their wrapper Row visibility.
         -- This keeps hidden Sections out of stacking and scroll measurements.
         if section then row:SetShown(section:IsShown()) end
         if section and column and row:IsShown() then
@@ -1033,7 +1251,7 @@ function L:ReflowPage(page, rows, opts)
         end
     end
 
-    return self:StackRows(page, rows, {
+    return self:StackRows(container, rows, {
         padding = opts.padding or 0,
         gap = opts.gap or L.Metrics.SECTION_GAP,
     })
