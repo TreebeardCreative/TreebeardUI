@@ -239,7 +239,7 @@ function Host:Create(config)
     end
     local preset = nil -- use live per-owner preset for window chrome
     local style = Styles:Get(Styles:GetConsumerPreset(owner))
-    local root = TBU.Compatibility:CreateBackdropFrame("Frame", UIParent)
+    local root = TBU:CreateBackdropFrame("Frame", UIParent)
     root._tbuHideWindowBorder = frameBorderMode == "none"
     root._tbuSurfaceOptions = options.surface or {}
     root.windowKey = key
@@ -823,7 +823,7 @@ function Host:Create(config)
         -- Pane headers (including navigation headers) use the page-header
         -- surface by default. Consumers can request a section header explicitly.
         local sectionHeader = options.headerStyle == "section"
-        local pane = TBU.Compatibility:CreateBackdropFrame("Frame", parent)
+        local pane = TBU:CreateBackdropFrame("Frame", parent)
         Styles:ApplyPanel(pane) -- resolve the pane owner on every repaint
         local paneStyle = Styles:Get(Styles:GetConsumerPreset(owner))
         local paneMinimumWidth = math.max(15, tonumber(options.minimumWidth)

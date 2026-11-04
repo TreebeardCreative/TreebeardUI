@@ -263,7 +263,7 @@ end
 
 function L:Section(parent, id, opts)
     opts = opts or {}
-    local section = TBU.Compatibility:CreateBackdropFrame("Frame", parent)
+    local section = TBU:CreateBackdropFrame("Frame", parent)
     section.layoutKind = "section"
     section.layoutId = id
     section.layoutChildren = {}
@@ -317,7 +317,7 @@ end
 
 function L:MainHeader(section, text, opts)
     opts = opts or {}
-    local header = TBU.Compatibility:CreateBackdropFrame("Frame", section)
+    local header = TBU:CreateBackdropFrame("Frame", section)
     local minHeight = tonumber(opts.height) or L.Metrics.SECTION_HEADER_HEIGHT
     local paddingX = math.max(0, tonumber(opts.paddingX) or 8)
     local paddingY = math.max(0, tonumber(opts.paddingY) or 4)

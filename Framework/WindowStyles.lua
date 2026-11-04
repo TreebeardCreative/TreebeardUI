@@ -348,7 +348,7 @@ function Styles:CreateFlatTexture(parent, layer, color)
 end
 
 function Styles:CreateButton(parent, label, width, onClick, presetName, labelOptions)
-    local button = TBU.Compatibility:CreateBackdropFrame("Button", parent)
+    local button = TBU:CreateBackdropFrame("Button", parent)
     button:SetSize(math.max(1, tonumber(width) or 170), 23)
     local style = self:Get(presetName)
     local text = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")

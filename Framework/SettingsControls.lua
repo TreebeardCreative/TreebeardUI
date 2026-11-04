@@ -397,7 +397,7 @@ end
 -- interaction and existing option-menu logic stay intact; no Blizzard
 -- WowStyle1DropdownTemplate visual dependency remains.
 local function CreateDropdownButton(parent)
-    local button = TBU.Compatibility:CreateBackdropFrame("Button", parent)
+    local button = TBU:CreateBackdropFrame("Button", parent)
     button:SetSize(206, 26)
     -- Match the stable hudcraft/Section backdrop technique. The native
     -- backdrop owns the field's complete border; there are no overlay edges.
@@ -638,7 +638,7 @@ local function AddMultiDropdown(parent, label, x, y, options, width, emptyText)
     end
 
     -- Popup belongs to this control. Match the visible dropdown field width exactly.
-    local menu = TBU.Compatibility:CreateBackdropFrame("Frame", parent)
+    local menu = TBU:CreateBackdropFrame("Frame", parent)
     menu:SetFrameLevel(button:GetFrameLevel() + 20)
     menu:SetWidth(controlWidth)
     menu:SetPoint("TOPLEFT", button, "BOTTOMLEFT", 0, DropdownMetrics.MENU_OFFSET_Y)
@@ -1141,7 +1141,7 @@ local function AddSingleDropdown(parent, label, x, y, options, getter, setter, w
         SetDropdownDisplayText(displayText, optionDisplay(getter()), controlWidth - DropdownMetrics.DISPLAY_LEFT_INSET - DropdownMetrics.DISPLAY_RIGHT_INSET)
     end
 
-    local menu = TBU.Compatibility:CreateBackdropFrame("Frame", parent)
+    local menu = TBU:CreateBackdropFrame("Frame", parent)
     menu:SetFrameLevel(button:GetFrameLevel() + 20)
     menu:SetPoint("TOPLEFT", button, "BOTTOMLEFT", 0, DropdownMetrics.MENU_OFFSET_Y)
     -- Test the same native one-pixel border as the stable Section border.
@@ -2192,7 +2192,7 @@ local function AddHexColorContent(parent, label, getter, setter, onChanged)
         end,
         {maxLetters=32, rightInset=28, isColorInput=true})
     content.layoutRole = "color"
-    local swatch = TBU.Compatibility:CreateBackdropFrame("Frame", content.editBox)
+    local swatch = TBU:CreateBackdropFrame("Frame", content.editBox)
     swatch:SetSize(12, 12)
     swatch:SetPoint("RIGHT", content.editBox, "RIGHT", -5, 0)
     swatch:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8X8",edgeFile="Interface\\Buttons\\WHITE8X8",edgeSize=1})
@@ -2253,7 +2253,7 @@ local function AddDraggableOrderedListContent(parent, labelText, initialValues, 
     local Refresh
     local lastListWidth
     local function CreateRow()
-        local row = TBU.Compatibility:CreateBackdropFrame("Button", list)
+        local row = TBU:CreateBackdropFrame("Button", list)
         row:SetHeight(ROW_HEIGHT)
         row:SetBackdrop({
             bgFile="Interface\\Buttons\\WHITE8X8",
