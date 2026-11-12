@@ -3,8 +3,9 @@ local _, private = ...
 if (private.__TBUISkip or private.__TreebeardUISkip) then return end
 local TBU = (private.__TBUIRuntime or private.__TreebeardUIRuntime) or private
 
--- Shared Settings page canvas and scroll lifecycle. No navigation routing,
--- semantic content, or Blizzard category registration lives here.
+-- Shared Settings page canvas and scroll lifecycle. Page canvases intentionally
+-- use the same mainCanvasColor as their containing window pane. No navigation
+-- routing, semantic content, or Blizzard category registration lives here.
 local PageHost = {}
 TBU.SettingsPageHost = PageHost
 
@@ -53,7 +54,7 @@ function PageHost:CreateCanvas(name, description, pageId, opts)
     background:SetTexture(WHITE)
     local function repaintBackground(target)
         local style = TBU.WindowStyles:GetForFrame(target)
-        target:SetVertexColor(unpack(style.canvasBackground))
+        target:SetVertexColor(unpack(TBU.WindowStyles:GetMainCanvasColor(style)))
     end
     TBU.WindowStyles:RegisterVisual(background, repaintBackground)
     repaintBackground(background)
@@ -64,6 +65,13 @@ function PageHost:CreateCanvas(name, description, pageId, opts)
     title:SetWordWrap(opts.titleWrap ~= false)
     if title.SetNonSpaceWrap then title:SetNonSpaceWrap(opts.titleWrap ~= false) end
     title:SetText(opts.title or name or "Settings")
+    if TBU.WindowStyles then
+        local function repaintTitle(target)
+            target:SetTextColor(unpack(TBU.WindowStyles:GetTextColor("header", target)))
+        end
+        TBU.WindowStyles:RegisterVisual(title, repaintTitle)
+        repaintTitle(title)
+    end
     local desc = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
     desc:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -6)
     desc:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -16, -16)

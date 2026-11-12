@@ -3,7 +3,9 @@ Treebeard UI is a shared settings framework built for TreebeardCreative’s Worl
 
 ## Version and compatibility
 
-Latest tested Retail pair: TreebeardUI `0.1.75` / API `1` with TreebeardSandbox `0.1.145`, on Retail `12.1.5`, build `70783`, interface `120105`. Treebeard reports the focused minimized-body test passed: the Consumer Options Frame title bar draws its shared seam edge only while the body is minimized. The preceding `.141/.75` checks covered startup after removing `Compatibility/`, Settings and Style Library, Custom Border Tests, and showing/moving/resizing the test frame. These are scoped Retail checks; WoW Forever and a second independent consumer remain untested, so API 1 release readiness is not established.
+Latest tested Forever pair: TreebeardUI `0.2.14` / API `1` with TreebeardSandbox `0.2.36`, on WoW Forever `1.60.1`, build `70888`, interface `16001`. Treebeard reports the focused navigation/load, controls, scroll/resize, rounded-border rendering, and rounded-border content-flow checks passed. These are scoped in-game checks, not full release certification; API 1 is still in pre-release development, and testing with a second independent consumer remains outstanding.
+
+Latest tested Retail pair: TreebeardUI `0.1.75` / API `1` with TreebeardSandbox `0.1.145`, on Retail `12.1.5`, build `70783`, interface `120105`. Treebeard reports the focused minimized-body test passed: the Consumer Options Frame title bar draws its shared seam edge only while the body is minimized. The preceding `.141/.75` checks covered startup after removing `Compatibility/`, Settings and Style Library, Custom Border Tests, and showing/moving/resizing the test frame. These are scoped Retail checks and do not establish current-build Retail compatibility.
 
 The Retail TOC targets interface `120105`; `TreebeardUI_Forever.toc` targets `16001`. Both load the same framework implementation and shared `BackdropTemplate` frame factory from `Bootstrap.lua`; client-specific behavior should be added only when a verified difference requires it.
 

@@ -2,11 +2,15 @@
 ## Title: TreebeardUI
 ## Notes: Shared window, controls and adaptive layout framework.
 ## Author: TreebeardCreative
-## Version: 0.1.75
+## Version: 0.2.14
 ## IconTexture: Interface\AddOns\TreebeardUI\Textures\addon_icon.tga
 
 Bootstrap.lua
+Framework/ColorFactory.lua
 Framework/WindowStyles.lua
+Framework/BorderStyles.lua
+Framework/NavigationControls.lua
+Framework/HoverEffects.lua
 Framework/SettingsLayout.lua
 Framework/SettingsControls.lua
 Framework/SettingsPageMeasure.lua

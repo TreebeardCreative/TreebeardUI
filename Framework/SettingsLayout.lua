@@ -177,6 +177,13 @@ function L:CreateInnerBorder(frame)
     for _, side in ipairs({"top", "bottom", "left", "right"}) do
         local edge = frame:CreateTexture(nil, "OVERLAY")
         edge:SetTexture("Interface\\Buttons\\WHITE8X8")
+        local borderColor = TBU.WindowStyles and TBU.WindowStyles:GetBorderColor(frame)
+        if borderColor then edge:SetVertexColor(unpack(borderColor)) end
+        if TBU.WindowStyles and TBU.WindowStyles.RegisterVisual then
+            TBU.WindowStyles:RegisterVisual(edge, function(target)
+                target:SetVertexColor(unpack(TBU.WindowStyles:GetBorderColor(target)))
+            end)
+        end
         -- This edge already has a physical-pixel width. Leave texture sampling
         -- unsnapped so the client does not independently sharpen each edge as
         -- a content viewport changes size.
@@ -211,8 +218,10 @@ end
 
 function L:SetInnerBorderColor(frame, color)
     local parts = self:CreateInnerBorder(frame)
-    if type(color) ~= "table" then return end
-    for _, edge in ipairs(parts) do edge:SetVertexColor(unpack(color)) end
+    local borderColor = TBU.WindowStyles and TBU.WindowStyles.GetBorderColor
+        and TBU.WindowStyles:GetBorderColor(frame) or color
+    if type(borderColor) ~= "table" then return end
+    for _, edge in ipairs(parts) do edge:SetVertexColor(unpack(borderColor)) end
 end
 
 -- Disable the client's texture-edge sharpening under a framework-owned page.
@@ -261,6 +270,22 @@ function L:DisableTextureSnapping(root)
     return changed
 end
 
+local function NormalizeBorderInsets(value, fallback)
+    if type(value) == "number" then
+        local amount = math.max(0, value)
+        return {left=amount, right=amount, top=amount, bottom=amount}
+    end
+    value = type(value) == "table" and value or {}
+    local horizontal = math.max(0, tonumber(value.horizontal or value.x) or fallback)
+    local vertical = math.max(0, tonumber(value.vertical or value.y) or fallback)
+    return {
+        left=math.max(0, tonumber(value.left) or horizontal),
+        right=math.max(0, tonumber(value.right) or horizontal),
+        top=math.max(0, tonumber(value.top) or vertical),
+        bottom=math.max(0, tonumber(value.bottom) or vertical),
+    }
+end
+
 function L:Section(parent, id, opts)
     opts = opts or {}
     local section = TBU:CreateBackdropFrame("Frame", parent)
@@ -272,6 +297,16 @@ function L:Section(parent, id, opts)
     section.layoutGap = opts.gap
     if section.layoutGap == nil then section.layoutGap = L.Metrics.SECTION_GAP end
 
+    -- Optional per-section border geometry. Legacy sections keep their current
+    -- spacing; a selected border can declare its own edge width and safe inset.
+    local borderGeometry = type(opts.borderGeometry) == "table" and opts.borderGeometry or nil
+    if borderGeometry then
+        local edgeSize = math.max(0, tonumber(borderGeometry.edgeSize) or 1)
+        local contentInsets = NormalizeBorderInsets(borderGeometry.contentInsets, edgeSize)
+        section.layoutBorderInsets = contentInsets
+        section.layoutBorderGeometry = { edgeSize=edgeSize, contentInsets=contentInsets }
+    end
+
     -- Section is structural. Border/background are presentation choices only.
     if opts.border ~= false then
         -- Controlled Retail comparison: hudcraft v1.0.18's single native
@@ -279,25 +314,25 @@ function L:Section(parent, id, opts)
         section:SetBackdrop({
             bgFile = "Interface\\Buttons\\WHITE8X8",
             edgeFile = "Interface\\Buttons\\WHITE8X8",
-            edgeSize = 1,
+            edgeSize = section.layoutBorderGeometry and section.layoutBorderGeometry.edgeSize or 1,
         })
         local borderStyle = TBU.WindowStyles and TBU.WindowStyles:GetForFrame(section)
-        local neutralBorder = borderStyle and borderStyle.border or {0.22, 0.23, 0.26, 0.98}
-        local sectionFill = borderStyle and borderStyle.sectionBackground or {0, 0, 0, 0.18}
+        local sectionBorder = TBU.WindowStyles:GetSectionBorderColor(borderStyle)
+        local sectionFill = TBU.WindowStyles:GetSectionSurfaceColor(borderStyle)
         if opts.backgroundAlpha ~= nil then
             sectionFill = {sectionFill[1], sectionFill[2], sectionFill[3], opts.backgroundAlpha}
         end
         section:SetBackdropColor(unpack(sectionFill))
-        section:SetBackdropBorderColor(unpack(neutralBorder))
+        section:SetBackdropBorderColor(unpack(sectionBorder))
         if TBU.WindowStyles and TBU.WindowStyles.RegisterVisual then
             TBU.WindowStyles:RegisterVisual(section, function(target)
                 local style = TBU.WindowStyles:GetForFrame(target)
-                local fill = style.sectionBackground
+                local fill = TBU.WindowStyles:GetSectionSurfaceColor(style)
                 if opts.backgroundAlpha ~= nil then
                     fill = {fill[1], fill[2], fill[3], opts.backgroundAlpha}
                 end
                 target:SetBackdropColor(unpack(fill))
-                target:SetBackdropBorderColor(unpack(style.border))
+                target:SetBackdropBorderColor(unpack(TBU.WindowStyles:GetSectionBorderColor(style)))
             end)
         end
     end
@@ -326,13 +361,15 @@ function L:MainHeader(section, text, opts)
     -- Source the neutral section-title fill from the SAME palette as window
     -- borders. Without an explicit color, WoW draws this as solid white.
     local style = TBU.WindowStyles and TBU.WindowStyles:GetForFrame(header)
-    local border = style and style.border or {0.22, 0.23, 0.26, 0.98}
-    header:SetBackdropColor(unpack((style and style.sectionHeaderFill) or border))
+    local border = style.allEverythingTestVariable
+    header:SetBackdropColor(unpack(style.allEverythingTestVariable))
     if TBU.WindowStyles and TBU.WindowStyles.RegisterVisual then
         TBU.WindowStyles:RegisterVisual(header, function(target)
             local style = TBU.WindowStyles:GetForFrame(target)
-            target:SetBackdropColor(unpack(style.sectionHeaderFill or style.border))
-            if target.label then target.label:SetTextColor(unpack(style.sectionHeaderText or style.interactionGold)) end
+            target:SetBackdropColor(unpack(style.allEverythingTestVariable))
+            if target.label then
+                target.label:SetTextColor(unpack(TBU.WindowStyles:GetTextColor("primary", target.label)))
+            end
         end)
     end
 
@@ -344,7 +381,10 @@ function L:MainHeader(section, text, opts)
     label:SetWordWrap(opts.wrap ~= false)
     if label.SetNonSpaceWrap then label:SetNonSpaceWrap(opts.wrap ~= false) end
     label:SetText(text or "")
-    label:SetTextColor(unpack((style and style.sectionHeaderText) or (style and style.text) or {1, 1, 1, 1}))
+    label:SetTextColor(unpack(TBU.WindowStyles:GetTextColor("header", label)))
+    TBU.WindowStyles:RegisterVisual(label, function(target)
+        target:SetTextColor(unpack(TBU.WindowStyles:GetTextColor("header", target)))
+    end)
     header.label = label
 
     local function FitHeader()
@@ -388,11 +428,89 @@ local function CreateLayoutText(section, text, opts, textRole, defaultFont, layo
     return textString
 end
 
+-- A lightweight section/area label with a text-width underline. The text and
+-- line remain independent style choices; consumers can supply a role and a
+-- style-aware color getter without creating another canvas or border layer.
+function L:TextHeader(section, text, opts)
+    opts = opts or {}
+    local styles = TBU.WindowStyles
+    local justifyH = opts.justifyH or "LEFT"
+    local underlineGap = math.max(0, tonumber(opts.underlineGap) or 2)
+    local underlineHeight = math.max(1, tonumber(opts.underlineHeight) or 2)
+    local textString = CreateLayoutText(section, text, {
+        justifyH = justifyH,
+        wrap = opts.wrap,
+        gapBefore = opts.gapBefore,
+        fontObject = opts.fontObject,
+    }, opts.textRole or "header", opts.fontObject or "GameFontHighlightSmall",
+        opts.role or "text-header")
+    textString.layoutBottomPadding = underlineGap + underlineHeight
+
+    local underline = styles and styles:CreateFlatTexture(section, "BORDER",
+        (type(opts.underlineColor) == "function" and opts.underlineColor(textString))
+            or styles:GetSeparatorColor(textString))
+    if underline then
+        underline:SetHeight(underlineHeight)
+        local function PositionUnderline()
+            local availableWidth = math.max(1, textString:GetWidth() or 1)
+            local measuredWidth = tonumber(textString:GetStringWidth()) or availableWidth
+            local width = math.max(1, math.min(availableWidth, measuredWidth))
+            local xOffset = 0
+            if justifyH == "CENTER" then
+                xOffset = (availableWidth - width) / 2
+            elseif justifyH == "RIGHT" then
+                xOffset = availableWidth - width
+            end
+            underline:ClearAllPoints()
+            underline:SetPoint("TOPLEFT", textString, "BOTTOMLEFT", xOffset, -underlineGap)
+            underline:SetWidth(width)
+        end
+        PositionUnderline()
+        if section.HookScript then section:HookScript("OnSizeChanged", PositionUnderline) end
+        if styles.RegisterVisual then
+            styles:RegisterVisual(underline, function(target)
+                local color = type(opts.underlineColor) == "function"
+                    and opts.underlineColor(textString) or styles:GetSeparatorColor(textString)
+                target:SetVertexColor(unpack(color))
+            end)
+        end
+    end
+    return textString, underline
+end
+
+-- Area headers separate related content with a little more breathing room than
+-- ordinary text headers. Keep both extra spacings overridable for consumers.
+function L:AreaHeader(section, text, opts)
+    opts = opts or {}
+    local headerOpts = {}
+    for key, value in pairs(opts) do headerOpts[key] = value end
+
+    local extraTop = math.max(0, tonumber(opts.extraTopSpacing) or 4)
+    local extraBottom = math.max(0, tonumber(opts.extraBottomSpacing) or 4)
+    local gapBefore = tonumber(opts.gapBefore)
+    if gapBefore == nil then gapBefore = self.Metrics.CONTENT_GAP end
+    headerOpts.gapBefore = math.max(0, gapBefore)
+    headerOpts.extraTopSpacing = nil
+    headerOpts.extraBottomSpacing = nil
+    headerOpts.textRole = opts.textRole or "textInteractionAccentColor"
+    headerOpts.underlineColor = opts.underlineColor or function(frame)
+        return TBU.WindowStyles:GetTextColor("textNeutralAccentColor", frame)
+    end
+
+    local textString, underline = self:TextHeader(section, text, headerOpts)
+    if textString then
+        textString.layoutTopPadding = (textString.layoutTopPadding or 0) + extraTop
+        textString.layoutBottomPadding = (textString.layoutBottomPadding or 0) + extraBottom
+    end
+    return textString, underline
+end
+
 function L:Note(section, text, opts)
     return CreateLayoutText(section, text, opts, "notes", "GameFontDisableSmall", "note")
 end
 
--- Primary-colored paragraph/text content. Use Note for muted supporting copy.
+-- Ordinary paragraph/text content. Note and Text are distinct helper names,
+-- but their current style color resolves to the shared allEverythingTestVariable field.
 function L:Text(section, text, opts)
     return CreateLayoutText(section, text, opts, "primary", "GameFontHighlightSmall", "content")
 end
@@ -401,6 +519,13 @@ function L:ReflowSection(section)
     if not section or not section.layoutChildren then return 1 end
     local pad = section.layoutPadding or L.Metrics.SECTION_PADDING
     local sectionGap = section.layoutGap or L.Metrics.SECTION_GAP
+    local borderInsets = section.layoutBorderInsets or {left=0, right=0, top=0, bottom=0}
+    local contentLeft = pad + borderInsets.left
+    local contentRight = pad + borderInsets.right
+    local contentTop = pad + borderInsets.top
+    local contentBottom = pad + borderInsets.bottom
+    local headerInsets = section.layoutBorderGeometry and borderInsets
+        or {left=1, right=1, top=1, bottom=1}
     local previous
     local firstFlowChild
     for _, child in ipairs(section.layoutChildren) do
@@ -412,26 +537,34 @@ function L:ReflowSection(section)
     -- Main headers are anchored to the Section's top edge. Do not count the
     -- Section's top inset as blank space before that header; place that inset
     -- after the header, before the first body item, and retain one bottom inset.
-    local total = firstFlowChild and firstFlowChild.layoutRole == "main-header" and 0 or pad
+    local total
+    if firstFlowChild and firstFlowChild.layoutRole == "main-header" then
+        total = section.layoutBorderGeometry and headerInsets.top or 0
+    else
+        total = contentTop
+    end
 
     for _, child in ipairs(section.layoutChildren) do
         if child.layoutParticipatesInFlow and child:IsShown() then
             if child.layoutKind == "section" then
-                SetWidthIfChanged(child, math.max(1, section:GetWidth() - (pad * 2)))
+                SetWidthIfChanged(child, math.max(1, section:GetWidth() - contentLeft - contentRight))
                 self:ReflowSection(child)
             elseif child.layoutKind == "row" then
-                self:LayoutRow(child, math.max(1, section:GetWidth() - (pad * 2)))
+                self:LayoutRow(child, math.max(1, section:GetWidth() - contentLeft - contentRight))
             end
+            local topPadding = math.max(0, tonumber(child.layoutTopPadding) or 0)
             local gap = previous and (child.layoutGapBefore or sectionGap) or 0
             if previous and previous.layoutRole == "main-header" then
                 gap = math.max(gap, pad)
             end
             local anchors
             if previous then
-                local xInset = (previous.layoutRole == "main-header") and (pad - 1) or 0
+                gap = gap + topPadding
+                local xInset = (previous.layoutRole == "main-header")
+                    and (contentLeft - headerInsets.left) or 0
                 anchors = {
                     {"TOPLEFT", previous, "BOTTOMLEFT", xInset, -gap},
-                    {"RIGHT", section, "RIGHT", -pad, 0},
+                    {"RIGHT", section, "RIGHT", -contentRight, 0},
                 }
                 total = total + gap
             else
@@ -439,15 +572,16 @@ function L:ReflowSection(section)
                 -- uses the shared section inset.
                 if child.layoutRole == "main-header" then
                     anchors = {
-                        {"TOPLEFT", section, "TOPLEFT", 1, -1},
-                        {"RIGHT", section, "RIGHT", -1, 0},
+                        {"TOPLEFT", section, "TOPLEFT", headerInsets.left, -headerInsets.top},
+                        {"RIGHT", section, "RIGHT", -headerInsets.right, 0},
                     }
                 else
                     anchors = {
-                        {"TOPLEFT", section, "TOPLEFT", pad, -pad},
-                        {"RIGHT", section, "RIGHT", -pad, 0},
+                        {"TOPLEFT", section, "TOPLEFT", contentLeft, -(contentTop + topPadding)},
+                        {"RIGHT", section, "RIGHT", -contentRight, 0},
                     }
                 end
+                total = total + topPadding
             end
 
             SetAnchorsIfChanged(child, anchors)
@@ -456,7 +590,7 @@ function L:ReflowSection(section)
             if child.GetObjectType and child:GetObjectType() == "FontString" then
                 h = math.max(h or 0, child:GetStringHeight() or 0)
             end
-            h = math.max(1, h or 0)
+            h = math.max(1, h or 0) + math.max(0, tonumber(child.layoutBottomPadding) or 0)
             total = total + h
             previous = child
         end
@@ -465,7 +599,7 @@ function L:ReflowSection(section)
     -- Round the measured outer rectangle upward on the physical-pixel grid.
     -- Each child height and gap above uses that same grid, so dynamic growth
     -- cannot leave the section's bottom edge between screen pixels.
-    SetHeightIfChanged(section, math.max(1, total + pad))
+    SetHeightIfChanged(section, math.max(1, total + contentBottom))
     return section:GetHeight()
 end
 

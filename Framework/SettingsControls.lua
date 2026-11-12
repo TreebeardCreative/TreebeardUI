@@ -81,25 +81,73 @@ local function StopWatchingInput(edit)
     watchedInput = nil
     inputFocusWatch:Hide()
 end
+-- Share one authoritative focus state across every visual attached to an
+-- EditBox. Widget focus events update it immediately; Refresh also reconciles
+-- against HasFocus so a missed/replaced callback cannot leave stale styling.
+local InputFocus = TBU.InputFocus or {}
+TBU.InputFocus = InputFocus
+local function SetInputFocused(edit, focused)
+    local state = edit and edit._tbuInputFocusState
+    if not state then return end
+    focused = focused == true
+    if state.focused == focused then return end
+    state.focused = focused
+    for _, listener in ipairs(state.listeners) do
+        listener(focused, edit)
+    end
+end
+function InputFocus:Attach(edit, onChanged)
+    if not edit or not edit.HookScript or not edit.HasFocus then return nil end
+    local state = edit._tbuInputFocusState
+    if not state then
+        state = { focused = edit:HasFocus() and true or false, listeners = {} }
+        edit._tbuInputFocusState = state
+        edit:HookScript("OnEditFocusGained", function()
+            SetInputFocused(edit, true)
+            WatchInputFocus(edit)
+        end)
+        edit:HookScript("OnEditFocusLost", function()
+            SetInputFocused(edit, false)
+            -- The focus-lost event is authoritative here. Do not poll this
+            -- EditBox again: a stale HasFocus result could re-enable its
+            -- interaction visuals after the blur event.
+            StopWatchingInput(edit)
+        end)
+    end
+    if type(onChanged) == "function" then
+        state.listeners[#state.listeners + 1] = onChanged
+        onChanged(state.focused, edit)
+    end
+    if state.focused then WatchInputFocus(edit) end
+    return state
+end
+function InputFocus:IsFocused(edit)
+    local state = edit and edit._tbuInputFocusState
+    if state then return state.focused end
+    return edit and edit.HasFocus and edit:HasFocus() or false
+end
+function InputFocus:Refresh(edit)
+    if not edit or not edit.HasFocus then return false end
+    local focused = edit.IsShown and edit:IsShown() and edit:HasFocus() or false
+    SetInputFocused(edit, focused)
+    if focused then WatchInputFocus(edit) else StopWatchingInput(edit) end
+    return focused
+end
 inputFocusWatch:SetScript("OnUpdate", function()
     local edit = watchedInput
-    if not edit or not edit:IsShown() or not edit:HasFocus() then
+    if not edit then
         watchedInput = nil
         inputFocusWatch:Hide()
         return
     end
+    if not InputFocus:Refresh(edit) then return end
     local down = (IsMouseButtonDown and (IsMouseButtonDown("LeftButton") or IsMouseButtonDown("RightButton"))) or false
     if down and not mousePreviouslyDown and not FocusedRegionIsInput(edit) then
         edit:ClearFocus()
+        InputFocus:Refresh(edit)
     end
     mousePreviouslyDown = down
 end)
-
--- Input icon and focused input chrome intentionally use the same semantic
--- accent. Each preset may give this role its own value.
-local function InputHighlightColor(style)
-    return style.dropdownActiveBorder or style.borderHover or style.interactionGold or style.text
-end
 
 -- Framework-owned image asset. The consumer can hide it per ordinary input;
 -- color inputs use the swatch in the same position instead.
@@ -109,12 +157,14 @@ local function AddTextInputGlyph(edit)
     icon:SetSize(16, 16)
     icon:SetPoint("RIGHT", edit, "RIGHT", -6, 0)
     local function repaint()
-        local style = TBU.WindowStyles:GetForFrame(edit)
-        local color = InputHighlightColor(style)
+        local styles = TBU.WindowStyles
+        local color = TBU.InputFocus:IsFocused(edit)
+            and styles:GetWindowInteractionColor(edit)
+            or styles:GetControlBorderColor(edit)
         icon:SetVertexColor(color[1], color[2], color[3], color[4] or 1)
     end
     TBU.WindowStyles:RegisterVisual(icon, repaint)
-    repaint()
+    TBU.InputFocus:Attach(edit, repaint)
     return icon
 end
 
@@ -197,20 +247,31 @@ local function ApplyContentText(fontString)
     fontString._tbuSettingsLevel = "CONTENT_TEXT"
     local path, _, flags = fontString:GetFont()
     if path then fontString:SetFont(path, CONTENT_TEXT_FONT_SIZE, flags or "") end
+    if TBU.WindowStyles then
+        local function repaint(target)
+            target:SetTextColor(unpack(TBU.WindowStyles:GetTextColor("primary", target)))
+        end
+        TBU.WindowStyles:RegisterVisual(fontString, repaint)
+        repaint(fontString)
+    end
 end
 
--- Semantic text treatment: labels stay primary, displayed choices are quieter.
--- Resolve through the owning frame on every theme repaint.
-local function ApplyRoleColor(target, role, focusAware)
+-- The role argument is retained for existing call sites, but all text uses
+-- currently resolve to the shared allTextTestVariable style field.
+local function ApplyRoleColor(target, role, focusAware, hoverFrame)
     if not target or not TBU.WindowStyles then return end
     local function repaint(obj)
-        local resolved = (focusAware and obj.HasFocus and obj:HasFocus()) and "primary" or role
+        local focused = focusAware and TBU.InputFocus:IsFocused(obj)
+        local hovered = hoverFrame and hoverFrame.IsMouseOver and hoverFrame:IsMouseOver()
+        local resolved = focused and "primary" or (hovered and "primary" or role)
         obj:SetTextColor(unpack(TBU.WindowStyles:GetTextColor(resolved, obj)))
     end
     TBU.WindowStyles:RegisterVisual(target, repaint)
-    if focusAware and target.HookScript then
-        target:HookScript("OnEditFocusGained", repaint)
-        target:HookScript("OnEditFocusLost", repaint)
+    if focusAware then TBU.InputFocus:Attach(target, function() repaint(target) end) end
+    if hoverFrame and hoverFrame.HookScript then
+        local repaintTarget = function() repaint(target) end
+        hoverFrame:HookScript("OnEnter", repaintTarget)
+        hoverFrame:HookScript("OnLeave", repaintTarget)
     end
     repaint(target)
     return repaint
@@ -221,55 +282,70 @@ local function ApplyButtonContentText(button)
     ApplyContentText(button:GetFontString())
 end
 
-local function AddDropdownOptionHighlight(row, onEnter, widthProvider)
+local function GetDropdownOptionHighlightWidth(row, fontString, indicator)
+    local leftInset = DropdownMetrics.OPTION_INDICATOR_LEFT_INSET
+    if indicator then
+        leftInset = leftInset + ControlMetrics.DROPDOWN_OPTION_INDICATOR_SIZE + DropdownMetrics.OPTION_TEXT_GAP
+    end
+    local labelWidth = math.ceil(fontString and fontString.GetStringWidth and fontString:GetStringWidth() or 0)
+    local availableWidth = math.max(1, math.ceil(row:GetWidth() or 1))
+    return math.min(availableWidth, leftInset + labelWidth + DropdownMetrics.OPTION_TEXT_RIGHT_INSET)
+end
+
+local function AddDropdownOptionHighlight(row, onEnter, widthProvider, widthScale, horizontalOffset)
     local highlight = row:CreateTexture(nil, "BACKGROUND")
+    highlight:SetTexture(TBU:GetAssetPath("text_highlight_full.png"))
+    widthScale = tonumber(widthScale) or 1
+    horizontalOffset = tonumber(horizontalOffset) or 0
 
     local function RefreshHighlightWidth()
+        -- Preserve the established bounds: top-left anchored, full row height,
+        -- and sized from the same optional content-width provider.
         highlight:ClearAllPoints()
-        highlight:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+        highlight:SetPoint("TOPLEFT", row, "TOPLEFT", horizontalOffset, 0)
         if widthProvider then
             local width = math.max(1, math.ceil(tonumber(widthProvider()) or 1))
+            width = math.min(math.max(1, math.ceil(row:GetWidth() or 1)), math.ceil(width * widthScale))
             highlight:SetWidth(width)
-            highlight:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 0, 0)
+            highlight:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", horizontalOffset, 0)
         else
             highlight:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", 0, 0)
         end
-    end
-    RefreshHighlightWidth()
-    local atlasApplied = pcall(highlight.SetAtlas, highlight, "Options_List_Hover", true)
-    if not atlasApplied then
-        highlight:SetTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight")
-        highlight:SetBlendMode("ADD")
-    end
-    highlight:Hide()
 
+        local color = TBU.WindowStyles:GetControlOptionHighlightColor(row)
+        highlight:SetVertexColor(color[1] or 1, color[2] or 1, color[3] or 1, color[4] or 1)
+    end
+
+    highlight.RefreshWidth = RefreshHighlightWidth
+    TBU.WindowStyles:RegisterVisual(row, function() RefreshHighlightWidth() end)
+    RefreshHighlightWidth()
+    highlight:Hide()
     row:HookScript("OnEnter", function()
         RefreshHighlightWidth()
         highlight:Show()
         if onEnter then onEnter() end
     end)
     row:HookScript("OnLeave", function() highlight:Hide() end)
-    highlight.RefreshWidth = RefreshHighlightWidth
     return highlight
 end
 
--- Framework-drawn choice indicators. Standard CheckButton behavior remains
--- native; only the four selection images and their theme tint are ours.
+-- Choice indicators have a container (the square/circle image) and a separate
+-- selected-state mark (the check/dot). The container follows the ordinary
+-- black control color; it is not part of the all-borders test category.
 local function CreateChoiceIndicator(parent, radio, size)
     local control = CreateFrame("CheckButton", nil, parent)
     control:SetSize(size, size)
-    local outline = control:CreateTexture(nil, "ARTWORK")
-    outline:SetAllPoints(control)
-    outline:SetTexture(TBU:GetAssetPath(radio and "radio_outline.png" or "checkbox_outline.png"))
+    local containerTexture = control:CreateTexture(nil, "ARTWORK")
+    containerTexture:SetAllPoints(control)
+    containerTexture:SetTexture(TBU:GetAssetPath(radio and "radio_outline.png" or "checkbox_outline.png"))
     local selected = control:CreateTexture(nil, "OVERLAY")
     selected:SetAllPoints(control)
     selected:SetTexture(TBU:GetAssetPath(radio and "radio_checked.png" or "checkbox_checked.png"))
     control:SetCheckedTexture(selected)
-    control:SetNormalTexture(outline)
+    control:SetNormalTexture(containerTexture)
     local function repaint()
-        local style = TBU.WindowStyles:GetForFrame(control)
-        outline:SetVertexColor(unpack(style.muted or style.text))
-        selected:SetVertexColor(unpack(style.interactionGold or style.text))
+        containerTexture:SetVertexColor(unpack(TBU.WindowStyles:GetControlContainerColor(control)))
+        selected:SetVertexColor(unpack(TBU.WindowStyles:GetControlIndicatorColor(control)))
     end
     TBU.WindowStyles:RegisterVisual(control, repaint)
     repaint()
@@ -399,8 +475,8 @@ end
 local function CreateDropdownButton(parent)
     local button = TBU:CreateBackdropFrame("Button", parent)
     button:SetSize(206, 26)
-    -- Match the stable hudcraft/Section backdrop technique. The native
-    -- backdrop owns the field's complete border; there are no overlay edges.
+    -- The closed dropdown trigger and expanded option pane both use the
+    -- shared control-border color, while keeping their own separate canvases.
     button:SetBackdrop({
         bgFile="Interface\\Buttons\\WHITE8X8",
         edgeFile="Interface\\Buttons\\WHITE8X8",
@@ -416,10 +492,9 @@ local function CreateDropdownButton(parent)
     local hovering = false
     local function Paint()
         local style = TBU.WindowStyles:GetForFrame(button)
-        button:SetBackdropColor(unpack(hovering and style.buttonHover or style.button))
-        local active = hovering or (button.TBUPopupMenu and button.TBUPopupMenu:IsShown())
-        button:SetBackdropBorderColor(unpack((active and style.dropdownActiveBorder) or style.dropdownFieldBorder or style.borderHover))
-        arrow:SetVertexColor(unpack(style.interactionGold))
+        button:SetBackdropColor(unpack(TBU.WindowStyles:GetControlInputCanvasColor(style)))
+        button:SetBackdropBorderColor(unpack(TBU.WindowStyles:GetControlBorderColor(style)))
+        arrow:SetVertexColor(unpack(TBU.WindowStyles:GetControlIndicatorColor(button)))
     end
     button.RepaintDropdown = Paint
     TBU.WindowStyles:RegisterVisual(button, Paint)
@@ -603,9 +678,9 @@ local function AddMultiDropdown(parent, label, x, y, options, width, emptyText)
         labelText:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
     end
     labelText:SetText(label or "")
-    labelText:SetTextColor(1, 1, 1)
+    labelText:SetTextColor(unpack(TBU.WindowStyles:GetTextColor("primary", labelText)))
     TBU.WindowStyles:RegisterVisual(labelText, function(text)
-        text:SetTextColor(unpack(TBU.WindowStyles:Get().text))
+        text:SetTextColor(unpack(TBU.WindowStyles:GetTextColor("primary", text)))
     end)
     -- Blizzard skin only. hudcraft owns all text/state/menu behavior.
     local button = CreateDropdownButton(parent)
@@ -621,7 +696,7 @@ local function AddMultiDropdown(parent, label, x, y, options, width, emptyText)
     displayText:SetPoint("LEFT", button, "LEFT", DropdownMetrics.DISPLAY_LEFT_INSET, 0)
     displayText:SetPoint("RIGHT", button, "RIGHT", -DropdownMetrics.DISPLAY_RIGHT_INSET, 0)
     displayText:SetJustifyH("LEFT")
-    displayText:SetTextColor(1, 1, 1)
+    displayText:SetTextColor(unpack(TBU.WindowStyles:GetTextColor("value", displayText)))
     ApplyContentText(displayText)
     TBU.WindowStyles:RegisterVisual(displayText, function(text)
         text:SetTextColor(unpack(TBU.WindowStyles:GetTextColor("value", text)))
@@ -652,8 +727,8 @@ local function AddMultiDropdown(parent, label, x, y, options, width, emptyText)
     })
     local function RepaintPopup(target)
         local color = TBU.WindowStyles:GetForFrame(target)
-        target:SetBackdropColor(unpack(color.background))
-        target:SetBackdropBorderColor(unpack(color.dropdownPopupBorder or color.interactionGold))
+        target:SetBackdropColor(unpack(TBU.WindowStyles:GetControlInputCanvasColor(color)))
+        target:SetBackdropBorderColor(unpack(TBU.WindowStyles:GetControlBorderColor(color)))
     end
     TBU.WindowStyles:RegisterVisual(menu, RepaintPopup)
     RepaintPopup(menu)
@@ -690,6 +765,7 @@ local function AddMultiDropdown(parent, label, x, y, options, width, emptyText)
             local row = entry.row
             row:SetWidth(math.max(1, availableWidth - (DropdownMetrics.MENU_HORIZONTAL_INSET * 2)))
             local rowHeight = PrepareDropdownOptionText(entry.text, row, entry.indicator, entry.name)
+            if row.highlight then row.highlight:RefreshWidth() end
             optionFlow:Add(row, rowHeight)
         end
         local fullHeight = optionFlow:GetHeight()
@@ -717,15 +793,18 @@ local function AddMultiDropdown(parent, label, x, y, options, width, emptyText)
         local row = CreateFrame("Frame", nil, scrollContent)
         row:SetWidth(math.max(1, controlWidth - (#options > DropdownMetrics.MAX_VISIBLE_OPTIONS and DropdownMetrics.SCROLLBAR_WIDTH or 0) - DropdownMetrics.MENU_HORIZONTAL_INSET * 2)) -- establish available wrapping width
         row:EnableMouse(true)
-        AddDropdownOptionHighlight(row, function() ExtendDropdownLifetime(button) end)
 
         local cb = CreateSmallCheckbox(row)
         cb:SetPoint("LEFT", row, "LEFT", DropdownMetrics.OPTION_INDICATOR_LEFT_INSET, 0)
 
         local optionText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        optionText:SetTextColor(1, 1, 1)
+        optionText:SetTextColor(unpack(TBU.WindowStyles:GetTextColor("value", optionText)))
         ApplyContentText(optionText)
-        ApplyRoleColor(optionText, "value")
+        ApplyRoleColor(optionText, "value", false, row)
+        row.highlight = AddDropdownOptionHighlight(row, function() ExtendDropdownLifetime(button) end, function()
+            return GetDropdownOptionHighlightWidth(row, optionText, cb)
+        end, 2)
+        row.highlight:RefreshWidth()
         optionEntries[#optionEntries + 1] = { row=row, indicator=cb, text=optionText, name=opt.name, getter=opt.getter }
 
         local function toggleOption(explicitValue)
@@ -822,7 +901,7 @@ CreateSettingsScrollbar = function(parent, scrollFrame, button, themeMode)
     local trackTexture = track:CreateTexture(nil, "BACKGROUND")
     trackTexture:SetTexture("Interface\\Buttons\\WHITE8X8")
     local function repaintTrack(target)
-        target:SetVertexColor(unpack(TBU.WindowStyles:GetForFrame(target).scrollTrack))
+        target:SetVertexColor(unpack(TBU.WindowStyles:GetScrollbarTrackColor(target)))
     end
     TBU.WindowStyles:RegisterVisual(trackTexture, repaintTrack)
     repaintTrack(trackTexture)
@@ -865,15 +944,18 @@ CreateSettingsScrollbar = function(parent, scrollFrame, button, themeMode)
         thumbMiddle:SetPoint("BOTTOMRIGHT", thumbBottom, "TOPRIGHT")
     end
 
-    local thumbHovered = false
-    local function accent()
-        return unpack(TBU.WindowStyles:GetForFrame(bar).interactionGold)
+    local function indicatorColor()
+        return TBU.WindowStyles:GetControlIndicatorColor(bar)
     end
-    local function thumbAccent()
-        if not thumbHovered and not thumb.dragging then
-            return unpack(TBU.WindowStyles:GetForFrame(bar).resizeGripIdle)
+    local trackHovered, thumbHovered, thumbDragging = false, false, false
+    local function thumbColor()
+        local styles = TBU.WindowStyles
+        if thumbDragging then
+            return styles:GetMainNavigationButtonSelectedBorderColor(thumb)
+        elseif trackHovered or thumbHovered then
+            return styles:GetControlIndicatorColor(thumb)
         end
-        return accent()
+        return styles:GetScrollbarThumbIdleColor(thumb)
     end
     local function maxScroll()
         if scrollFrame.GetVerticalScrollRange then
@@ -882,8 +964,11 @@ CreateSettingsScrollbar = function(parent, scrollFrame, button, themeMode)
         return math.max(0, (scrollFrame:GetScrollChild() and scrollFrame:GetScrollChild():GetHeight() or 0) - scrollFrame:GetHeight())
     end
     local function update()
-        local r, g, b = accent()
-        for _, part in ipairs(thumbParts) do part:SetVertexColor(thumbAccent()) end
+        local indicator = indicatorColor()
+        local r, g, b = indicator[1] or 1, indicator[2] or 1, indicator[3] or 1
+        local alpha = indicator[4] or 1
+        local thumbR, thumbG, thumbB, thumbA = unpack(thumbColor())
+        for _, part in ipairs(thumbParts) do part:SetVertexColor(thumbR, thumbG, thumbB, thumbA or 1) end
         local maximum = maxScroll()
         local value = math.max(0, math.min(maximum, scrollFrame:GetVerticalScroll() or 0))
         local trackHeight = math.max(1, track:GetHeight())
@@ -905,8 +990,8 @@ CreateSettingsScrollbar = function(parent, scrollFrame, button, themeMode)
             -((maximum > 0) and (value / maximum * (trackHeight - thumbHeight)) or 0))
         -- Fractional frame scaling can leave the last pixel short of the
         -- nominal scroll range; disabled states use a 1px tolerance.
-        upTexture:SetVertexColor(r, g, b, value <= 1 and 0.35 or 1)
-        downTexture:SetVertexColor(r, g, b, value >= maximum - 1 and 0.35 or 1)
+        upTexture:SetVertexColor(r, g, b, alpha * (value <= 1 and 0.35 or 1))
+        downTexture:SetVertexColor(r, g, b, alpha * (value >= maximum - 1 and 0.35 or 1))
     end
     local function scrollBy(delta)
         delta = tonumber(delta) or 0
@@ -949,14 +1034,20 @@ CreateSettingsScrollbar = function(parent, scrollFrame, button, themeMode)
     local function endThumbDrag(self)
         self.dragging = false
         self:SetScript("OnUpdate", nil)
+        thumbDragging = false
         thumbHovered = self:IsMouseOver() and true or false
         update()
     end
     thumb:SetScript("OnEnter", function() thumbHovered = true; update() end)
     thumb:SetScript("OnLeave", function() thumbHovered = false; update() end)
+    -- Match the horizontal slider's hover target: the whole usable track lane
+    -- highlights the thumb, not only the small thumb hit rectangle.
+    track:SetScript("OnEnter", function() trackHovered = true; update() end)
+    track:SetScript("OnLeave", function() trackHovered = false; update() end)
+    track:SetScript("OnHide", function() trackHovered = false; update() end)
     thumb:SetScript("OnMouseDown", function(self, button)
         if button ~= "LeftButton" then return end
-        self.dragging = true
+        thumbDragging = true
         thumbHovered = true
         update()
         -- Only run this update while being dragged; a released mouse outside
@@ -973,7 +1064,7 @@ CreateSettingsScrollbar = function(parent, scrollFrame, button, themeMode)
         if button == "LeftButton" then endThumbDrag(self) end
     end)
     thumb:SetScript("OnHide", function(self)
-        self.dragging = false
+        thumbDragging = false
         self:SetScript("OnUpdate", nil)
         thumbHovered = false
         update()
@@ -1099,9 +1190,9 @@ local function AddSingleDropdown(parent, label, x, y, options, getter, setter, w
         labelText:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
     end
     labelText:SetText(label or "")
-    labelText:SetTextColor(1, 1, 1)
+    labelText:SetTextColor(unpack(TBU.WindowStyles:GetTextColor("primary", labelText)))
     TBU.WindowStyles:RegisterVisual(labelText, function(text)
-        text:SetTextColor(unpack(TBU.WindowStyles:Get().text))
+        text:SetTextColor(unpack(TBU.WindowStyles:GetTextColor("primary", text)))
     end)
     local button = CreateDropdownButton(parent)
     button.labelText = labelText
@@ -1118,7 +1209,7 @@ local function AddSingleDropdown(parent, label, x, y, options, getter, setter, w
     displayText:SetPoint("LEFT", button, "LEFT", DropdownMetrics.DISPLAY_LEFT_INSET, 0)
     displayText:SetPoint("RIGHT", button, "RIGHT", -DropdownMetrics.DISPLAY_RIGHT_INSET, 0)
     displayText:SetJustifyH("LEFT")
-    displayText:SetTextColor(1, 1, 1)
+    displayText:SetTextColor(unpack(TBU.WindowStyles:GetTextColor("value", displayText)))
     ApplyContentText(displayText)
     TBU.WindowStyles:RegisterVisual(displayText, function(text)
         text:SetTextColor(unpack(TBU.WindowStyles:GetTextColor("value", text)))
@@ -1154,8 +1245,8 @@ local function AddSingleDropdown(parent, label, x, y, options, getter, setter, w
     })
     local function RepaintPopup(target)
         local color = TBU.WindowStyles:GetForFrame(target)
-        target:SetBackdropColor(unpack(color.background))
-        target:SetBackdropBorderColor(unpack(color.dropdownPopupBorder or color.interactionGold))
+        target:SetBackdropColor(unpack(TBU.WindowStyles:GetControlInputCanvasColor(color)))
+        target:SetBackdropBorderColor(unpack(TBU.WindowStyles:GetControlBorderColor(color)))
     end
     TBU.WindowStyles:RegisterVisual(menu, RepaintPopup)
     RepaintPopup(menu)
@@ -1229,14 +1320,13 @@ local function AddSingleDropdown(parent, label, x, y, options, getter, setter, w
                     -DropdownMetrics.HEADER_HORIZONTAL_INSET, 0)
                 underline:SetHeight(1)
                 local function repaintDivider(target)
-                    target:SetVertexColor(unpack(TBU.WindowStyles:GetForFrame(target).dropdownDivider))
+                    target:SetVertexColor(unpack(TBU.WindowStyles:GetSeparatorColor(target)))
                 end
                 TBU.WindowStyles:RegisterVisual(underline, repaintDivider)
                 repaintDivider(underline)
             else
                 local row = CreateFrame("Button", nil, scrollContent)
                 row:SetWidth(math.max(1, menuContentWidth - DropdownMetrics.MENU_HORIZONTAL_INSET * 2)) -- measured within the scrolling viewport, not beneath the scrollbar
-                AddDropdownOptionHighlight(row, function() ExtendDropdownLifetime(button) end)
                 menu.dynamicChildren[#menu.dynamicChildren + 1] = row
 
                 local radio = CreateSingleSelectIndicator(row)
@@ -1244,10 +1334,14 @@ local function AddSingleDropdown(parent, label, x, y, options, getter, setter, w
                 radio:SetChecked(getter() == opt.value)
 
                 local optionText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                optionText:SetTextColor(1, 1, 1)
+                optionText:SetTextColor(unpack(TBU.WindowStyles:GetTextColor("value", optionText)))
                 ApplyContentText(optionText)
-                ApplyRoleColor(optionText, "value")
+                ApplyRoleColor(optionText, "value", false, row)
                 local rowHeight = PrepareDropdownOptionText(optionText, row, radio, opt.name)
+                row.highlight = AddDropdownOptionHighlight(row, function() ExtendDropdownLifetime(button) end, function()
+                    return GetDropdownOptionHighlightWidth(row, optionText, radio)
+                end, 2)
+                row.highlight:RefreshWidth()
                 optionFlow:Add(row, rowHeight)
                 scrollContent.layoutMenuRows[#scrollContent.layoutMenuRows + 1] = row
 
@@ -1354,7 +1448,7 @@ local function AddSteppedSlider(parent, label, values, x, y, getter, setter, for
     labelText:SetPoint("LEFT", labelRegion, "LEFT", 0, 0)
     labelText:SetPoint("RIGHT", labelRegion, "RIGHT", 0, 0)
     labelText:SetJustifyH("LEFT")
-    labelText:SetTextColor(1, 1, 1)
+    ApplyRoleColor(labelText, "primary")
 
     local controlRegion = CreateFrame("Frame", nil, content)
     controlRegion:SetPoint("TOPLEFT", content, "TOPLEFT", 0, -(labelHeight + labelGap))
@@ -1390,7 +1484,7 @@ local function AddSteppedSlider(parent, label, values, x, y, getter, setter, for
     local track = slider:CreateTexture(nil, "BACKGROUND")
     track:SetTexture("Interface\\Buttons\\WHITE8X8")
     local function repaintTrack(target)
-        target:SetVertexColor(unpack(TBU.WindowStyles:GetForFrame(target).sliderTrack))
+        target:SetVertexColor(unpack(TBU.WindowStyles:GetWindowBorderColor(target)))
     end
     TBU.WindowStyles:RegisterVisual(track, repaintTrack)
     repaintTrack(track)
@@ -1404,17 +1498,22 @@ local function AddSteppedSlider(parent, label, values, x, y, getter, setter, for
     slider:SetHitRectInsets(-2, -2, -2, -2)
     if thumb then
         thumb:SetSize(metrics.SLIDER_THUMB_SIZE, metrics.SLIDER_THUMB_SIZE)
-        -- Match the active preset scrollbar colors in normal and hover states.
-        -- or actively adjusting. Never change the consumer's slider value.
+        -- Match the shared control presentation: action-button canvas at rest,
+        -- dropdown-indicator color on hover, selected navigation border while
+        -- dragging. Never change the consumer's slider value.
         local hovering = false
         local dragging = false
         local function refreshThumbAccent()
-            local style = TBU.WindowStyles:GetForFrame(slider)
+            local styles = TBU.WindowStyles
+            local color
             if hovering or dragging then
-                thumb:SetVertexColor(unpack(style.interactionGold))
+                color = dragging
+                    and styles:GetMainNavigationButtonSelectedBorderColor(thumb)
+                    or styles:GetControlIndicatorColor(thumb)
             else
-                thumb:SetVertexColor(unpack(style.resizeGripIdle))
+                color = styles:GetControlThumbIdleColor(thumb)
             end
+            thumb:SetVertexColor(unpack(color))
         end
         TBU.WindowStyles:RegisterVisual(slider, refreshThumbAccent)
         slider:HookScript("OnEnter", function()
@@ -1571,6 +1670,7 @@ local function AddSteppedSlider(parent, label, values, x, y, getter, setter, for
         local function cancelEdit()
             valueEdit:Hide()
             valueEdit:ClearFocus()
+            TBU.InputFocus:Refresh(valueEdit)
             valueButton:Show()
             updateLabel(positionForValue(getter()), getter())
         end
@@ -1596,6 +1696,7 @@ local function AddSteppedSlider(parent, label, values, x, y, getter, setter, for
             local index = positionForValue(n)
             valueEdit:Hide()
             valueEdit:ClearFocus()
+            TBU.InputFocus:Refresh(valueEdit)
             valueButton:Show()
             syncing = true
             slider:SetValue(index)
@@ -1896,7 +1997,7 @@ local function AddCheckbox(parentColumn, label, getter, setter)
     content.layoutRole = "selection"
 
     local compactHighlightWidth = 1
-    local highlight = AddDropdownOptionHighlight(content, nil, function() return compactHighlightWidth end)
+    local highlight = AddDropdownOptionHighlight(content, nil, function() return compactHighlightWidth end, 1, -20)
 
     local check = CreateLargeCheckbox(content)
     check:SetPoint("LEFT", content, "LEFT", ControlMetrics.RADIO_INDICATOR_LEFT_INSET, 0)
@@ -1989,7 +2090,7 @@ local function AddRadioSelectorContent(parent, label, options, getter, setter)
                 -- Standalone selectors advertise only their actual visual/clickable
                 -- footprint. Long/wrapped labels can still grow to the available width.
                 row.compactHighlightWidth = 1
-                row.highlight = AddDropdownOptionHighlight(row, nil, function() return row.compactHighlightWidth end)
+                row.highlight = AddDropdownOptionHighlight(row, nil, function() return row.compactHighlightWidth end, 1, -20)
                 local indicator = CreateChoiceIndicator(row, true, ControlMetrics.STANDALONE_OPTION_INDICATOR_SIZE)
                 indicator:SetPoint("LEFT", row, "LEFT", ControlMetrics.RADIO_INDICATOR_LEFT_INSET, 0)
                 indicator:SetScript("OnClick", function() row:Click() end)
@@ -2002,7 +2103,7 @@ local function AddRadioSelectorContent(parent, label, options, getter, setter)
                 if text.SetNonSpaceWrap then text:SetNonSpaceWrap(false) end
                 if text.SetMaxLines then text:SetMaxLines(0) end
                 ApplyContentText(text)
-                ApplyRoleColor(text, "value")
+                ApplyRoleColor(text, "value", false, row)
                 row.text = text
 
                 row:SetScript("OnClick", function(self)
@@ -2080,22 +2181,25 @@ ApplyRecessedInput = function(edit, rightInset)
     edit:SetTextInsets(6, rightInset or 7, 0, 0)
     local function paintShadow()
         local style = TBU.WindowStyles:GetForFrame(edit)
+        local shadow = TBU.WindowStyles:GetRecessedInputShadowColor(style)
         for _, texture in ipairs(layers[1]) do
-            texture:SetVertexColor(unpack(style.inputShadow))
+            texture:SetVertexColor(unpack(shadow))
         end
     end
     local function paintBorder()
         local style = TBU.WindowStyles:GetForFrame(edit)
-        local border = edit:HasFocus() and InputHighlightColor(style)
-            or (style.border or style.borderHover)
+        local border = TBU.InputFocus:IsFocused(edit)
+            and TBU.WindowStyles:GetTextInputFocusBorderColor(style)
+            or TBU.WindowStyles:GetControlBorderColor(style)
         for _, texture in ipairs(layers[2]) do
-            texture:SetVertexColor(border[1], border[2], border[3], edit:HasFocus() and 1 or 0.28)
+            texture:SetVertexColor(border[1], border[2], border[3], 1)
         end
     end
     local function paintFill()
-        local bg = TBU.WindowStyles:GetForFrame(edit).background
+        local style = TBU.WindowStyles:GetForFrame(edit)
+        local fill = TBU.WindowStyles:GetControlInputCanvasColor(style)
         for _, texture in ipairs(layers[3]) do
-            texture:SetVertexColor(bg[1] * 0.62, bg[2] * 0.62, bg[3] * 0.62, 0.98)
+            texture:SetVertexColor(fill[1], fill[2], fill[3], fill[4] or 1)
         end
     end
     -- Register each visual region separately. The EditBox itself is also
@@ -2117,8 +2221,7 @@ ApplyRecessedInput = function(edit, rightInset)
         paintFill()
     end
     edit.RepaintInputChrome = repaint
-    edit:HookScript("OnEditFocusGained", function() WatchInputFocus(edit); repaint() end)
-    edit:HookScript("OnEditFocusLost", function() StopWatchingInput(edit); repaint() end)
+    TBU.InputFocus:Attach(edit, function() repaint() end)
     repaint()
 end
 
@@ -2166,6 +2269,7 @@ local function AddTextInputContent(parent, label, getter, setter, behavior)
         -- Even rejected edits are discarded; the consumer decides how to log.
         if commit then setter(edit:GetText()) end
         edit:ClearFocus()
+        TBU.InputFocus:Refresh(edit)
         if edit.RepaintInputChrome then edit:RepaintInputChrome() end
         finishing = false
         refresh()
@@ -2196,25 +2300,39 @@ local function AddHexColorContent(parent, label, getter, setter, onChanged)
     swatch:SetSize(12, 12)
     swatch:SetPoint("RIGHT", content.editBox, "RIGHT", -5, 0)
     swatch:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8X8",edgeFile="Interface\\Buttons\\WHITE8X8",edgeSize=1})
-    local function repaintSwatchBorder()
+    local preview = swatch:CreateTexture(nil, "ARTWORK")
+    preview:SetTexture("Interface\\Buttons\\WHITE8X8")
+    preview:SetPoint("TOPLEFT", swatch, "TOPLEFT", 2, -2)
+    preview:SetPoint("BOTTOMRIGHT", swatch, "BOTTOMRIGHT", -2, 2)
+    swatch.preview = preview
+    local function repaintSwatch()
         local style = TBU.WindowStyles:GetForFrame(content.editBox)
-        local border = style.border or style.muted or {0.5, 0.5, 0.5, 1}
+        local border = TBU.WindowStyles:GetControlBorderColor(style)
+        swatch:SetBackdropColor(unpack(TBU.WindowStyles:GetControlInputCanvasColor(style)))
         swatch:SetBackdropBorderColor(border[1], border[2], border[3], 0.95)
     end
-    TBU.WindowStyles:RegisterVisual(swatch, repaintSwatchBorder)
-    repaintSwatchBorder()
+    TBU.WindowStyles:RegisterVisual(swatch, repaintSwatch)
+    repaintSwatch()
     swatch:EnableMouse(false)
     local baseRefresh = content.Refresh
     local function refreshSwatch()
-        local _, r, g, b = getter()
-        swatch:SetBackdropColor(r or 1, g or 1, b or 1, 1)
+        local hex = tostring(getter() or ""):gsub("^#", "")
+        if #hex == 6 and hex:match("^%x+$") then
+            local r = tonumber(hex:sub(1, 2), 16) / 255
+            local g = tonumber(hex:sub(3, 4), 16) / 255
+            local b = tonumber(hex:sub(5, 6), 16) / 255
+            preview:SetVertexColor(r, g, b, 1)
+        else
+            preview:SetVertexColor(1, 1, 1, 1)
+        end
     end
     -- Register another shared refresh callback under the same key by replacing
-    -- the initial one. Both text and swatch repaint from the authoritative getter.
+    -- the initial one. The swatch derives its fill from the authoritative hex
+    -- value, so consumers do not need to return a second RGB representation.
     local function refresh()
         baseRefresh()
         refreshSwatch()
-        repaintSwatchBorder()
+        repaintSwatch()
     end
     content.Refresh = refresh
     content.RefreshColor = refresh
@@ -2260,25 +2378,24 @@ local function AddDraggableOrderedListContent(parent, labelText, initialValues, 
             edgeFile="Interface\\Buttons\\WHITE8X8",
             edgeSize=1,
         })
-        -- Shared ordered-list hover feedback; independent of Groups semantics.
-        local hover = row:CreateTexture(nil, "ARTWORK")
-        hover:SetAllPoints(row)
-        hover:SetTexture("Interface\\Buttons\\WHITE8X8")
-        hover:Hide()
-        row.hover = hover
+        -- Keep the row's existing canvas and border visible during hover/drag.
+        -- State styling can recolor these same surfaces without adding layers.
+        local hovering, dragging = false, false
         local function repaintRow(target)
             local style = TBU.WindowStyles:GetForFrame(target)
-            target:SetBackdropColor(unpack(style.orderedRowBackground))
-            target:SetBackdropBorderColor(unpack(style.orderedRowBorder))
-            target.hover:SetVertexColor(unpack(style.orderedRowHover))
+            -- GetMainCanvasColor returns one RGBA array, not four values.
+            -- BackdropTemplateMixin:SetBackdropColor expects numeric channels.
+            local canvas = TBU.WindowStyles:GetControlInputCanvasColor(style)
+            local alpha = (hovering or dragging) and 1 or (canvas[4] or 1)
+            target:SetBackdropColor(canvas[1], canvas[2], canvas[3], alpha)
+            target:SetBackdropBorderColor(unpack(TBU.WindowStyles:GetControlBorderColor(style)))
         end
         TBU.WindowStyles:RegisterVisual(row, repaintRow)
         repaintRow(row)
-        row:SetScript("OnEnter", function(self) self.hover:Show() end)
-        row:SetScript("OnLeave", function(self) self.hover:Hide() end)
         row:SetMovable(true)
         row:SetClampedToScreen(true)
         row:RegisterForDrag("LeftButton")
+        local restingFrameLevel
 
         local grip = row:CreateTexture(nil, "ARTWORK")
         grip:SetSize(16, 16)
@@ -2286,12 +2403,25 @@ local function AddDraggableOrderedListContent(parent, labelText, initialValues, 
         grip:SetTexture(TBU:GetAssetPath("draggable_list_grip.png"))
         row.grip = grip
         local function RepaintGrip()
-            local style = TBU.WindowStyles:GetForFrame(row)
-            local tint = style.borderHover or style.interactionGold or style.text
+            local styles = TBU.WindowStyles
+            local tint = dragging and styles:GetWindowInteractionColor(row)
+                or hovering and styles:GetWindowHighlightColor(row)
+                or styles:GetControlBorderColor(row)
             grip:SetVertexColor(unpack(tint))
         end
-        TBU.WindowStyles:RegisterVisual(row, RepaintGrip)
+        TBU.WindowStyles:RegisterVisual(grip, RepaintGrip)
         RepaintGrip()
+
+        row:HookScript("OnEnter", function()
+            hovering = true
+            repaintRow(row)
+            RepaintGrip()
+        end)
+        row:HookScript("OnLeave", function()
+            hovering = false
+            repaintRow(row)
+            RepaintGrip()
+        end)
 
         local label = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         label:SetPoint("LEFT", grip, "RIGHT", 8, 0)
@@ -2302,14 +2432,27 @@ local function AddDraggableOrderedListContent(parent, labelText, initialValues, 
 
         row:SetScript("OnDragStart", function(self)
             list.dragged = self
-            self.hover:Hide()
+            dragging = true
+            repaintRow(self)
+            RepaintGrip()
+            restingFrameLevel = self:GetFrameLevel()
+            local raisedFrameLevel = restingFrameLevel
+            for _, sibling in ipairs(list.rows) do
+                if sibling ~= self and sibling:IsShown() then
+                    raisedFrameLevel = math.max(raisedFrameLevel, sibling:GetFrameLevel())
+                end
+            end
+            self:SetFrameLevel(raisedFrameLevel + 1)
             self:StartMoving()
-            self:SetFrameStrata("DIALOG")
         end)
 
         row:SetScript("OnDragStop", function(self)
             self:StopMovingOrSizing()
             self:SetFrameStrata(list:GetFrameStrata())
+            if restingFrameLevel then
+                self:SetFrameLevel(restingFrameLevel)
+                restingFrameLevel = nil
+            end
 
             local values = control.values
             local _, cursorY = GetCursorPosition()
@@ -2339,6 +2482,9 @@ local function AddDraggableOrderedListContent(parent, labelText, initialValues, 
             end
 
             list.dragged = nil
+            dragging = false
+            repaintRow(self)
+            RepaintGrip()
             Refresh()
             if onReorder then onReorder(CopyValues(values), control) end
         end)
@@ -2374,7 +2520,6 @@ local function AddDraggableOrderedListContent(parent, labelText, initialValues, 
         for i = #values + 1, #list.rows do
             local row = list.rows[i]
             row:StopMovingOrSizing()
-            row.hover:Hide()
             row:ClearAllPoints()
             row:Hide()
             row.index = nil

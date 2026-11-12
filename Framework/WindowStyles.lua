@@ -3,23 +3,21 @@ local _, private = ...
 if (private.__TBUISkip or private.__TreebeardUISkip) then return end
 local TBU = (private.__TBUIRuntime or private.__TreebeardUIRuntime) or private
 
--- Warm Warcraft is the complete default palette and fallback. TreebeardUI
--- ships its built-in presets; consumers choose which ones to offer, and may
--- add their own presets.
+-- Unclassified rendered parts use a conspicuous fallback so missing style
+-- assignments are obvious during consumer testing. Intentional black remains
+-- available as a separate ColorFactory token.
 local Styles = {}
 TBU.WindowStyles = Styles
 
 local WHITE = "Interface\\Buttons\\WHITE8X8"
-Styles.DefaultPreset = "warm_warcraft"
-Styles.ActivePreset = "warm_warcraft"
+Styles.DefaultPreset = "Brushfire"
+Styles.ActivePreset = "Brushfire"
 Styles.ConsumerPresets = {}
 Styles.RenderOwner = nil
 Styles.Presets = {}
 
--- Keep semantic roles as independent palette entries even when two roles
--- currently share a color. Other presets may distinguish those roles.
--- Other styles clone Warm Warcraft, then override intentionally distinct
--- values. Geometry stays shared between presets.
+-- Copy helpers keep a consumer's color overrides independent from other
+-- presets while preserving the shared geometry defaults below.
 local function ClonePreset(base)
     local out = {}
     for k, v in pairs(base) do
@@ -34,56 +32,56 @@ local function ClonePreset(base)
     return out
 end
 
--- Warm Warcraft is based on Forever's dark, bronze-and-gold UI. Every color
--- role is explicit here so it remains the complete source palette.
-Styles.Presets.warm_warcraft = {
-    -- Main surfaces
-    background = {0.10980, 0.09804, 0.09020, 0.98}, -- #1C1917; lifted, less yellow
-    panel = {0.16078, 0.13725, 0.11765, 0.96}, -- #29231E; lifted neutral brown
-    canvasBackground = {0.06667, 0.05882, 0.05490, 1.00}, -- #110F0E
-    sectionBackground = {0.16078, 0.13725, 0.11765, 0.42}, -- #29231E at restrained opacity
+local defaultAllEverythingTestVariable = {0, 1, 0, 1}
 
-    -- Window, section, and control borders
-    border = {0.42353, 0.32941, 0.21961, 1.00}, -- #6C5438
-    borderHover = {0.66275, 0.49020, 0.27059, 1.00}, -- #A97D45
-    borderDrag = {0.88235, 0.72157, 0.24706, 1.00}, -- #E1B83F
-    dropdownFieldBorder = {0.42353, 0.32941, 0.21961, 1.00}, -- #6C5438; same as border, independent role
-    dropdownActiveBorder = {0.88235, 0.72157, 0.24706, 1.00}, -- #E1B83F
-    dropdownPopupBorder = {0.66275, 0.49020, 0.27059, 1.00}, -- #A97D45
-    dropdownDivider = {0.36, 0.27, 0.16, 0.90},
-    orderedRowBorder = {0.42353, 0.32941, 0.21961, 0.80}, -- #6C5438
+function Styles:RegisterPreset(name, allEverythingTestVariable, geometryPreset)
+    if type(name) ~= "string" or name == "" then return nil end
+    local geometry = self.Presets[geometryPreset or self.DefaultPreset] or self.GeometryDefaults
+    if not geometry then return nil end
+    local preset = ClonePreset(geometry)
+    local value = type(allEverythingTestVariable) == "table" and allEverythingTestVariable or defaultAllEverythingTestVariable
+    preset.allEverythingTestVariable = {value[1], value[2], value[3], value[4] or 1}
+    preset.allBordersTestVariable = {value[1], value[2], value[3], value[4] or 1}
+    preset.allTextTestVariable = {value[1], value[2], value[3], value[4] or 1}
+    -- Navigation color relationships are framework defaults for every style.
+    -- Each style resolves these tokens from its own ColorFactory families and
+    -- can override a field when it intentionally needs different behavior.
+    preset.mainNavigationButtonSelectedBorderColor = preset.mainNavigationButtonSelectedBorderColor or "interactionAccent_4"
+    preset.mainNavigationButtonCanvasColor = preset.mainNavigationButtonCanvasColor or "canvas_4"
+    preset.mainNavigationButtonInactiveCanvasColor = preset.mainNavigationButtonInactiveCanvasColor or "canvas_2"
+    preset.mainNavigationButtonInactiveHoverCanvasColor = preset.mainNavigationButtonInactiveHoverCanvasColor or "canvas_3"
+    preset.actionButtonCanvasColor = preset.actionButtonCanvasColor or "canvas_2"
+    preset.controlInputCanvasColor = preset.controlInputCanvasColor or "canvas_2"
+    preset.sectionSurfaceColor = preset.sectionSurfaceColor or "canvas_2"
+    preset.sectionBorderColor = preset.sectionBorderColor or "neutralAccent_4"
+    preset.frameHeaderActiveCanvasColor = preset.frameHeaderActiveCanvasColor or "canvas_2"
+    preset.recessedInputShadowColor = preset.recessedInputShadowColor or "black"
+    preset.controlThumbIdleColor = preset.controlThumbIdleColor or "interactionAccent_1"
+    preset.scrollbarThumbIdleColor = preset.scrollbarThumbIdleColor or "interactionAccent_1"
+    preset.resizeGripIdleColor = preset.resizeGripIdleColor or "neutralAccent_3"
+    preset.actionButtonPressedCanvasColor = preset.actionButtonPressedCanvasColor or "black"
+    preset.actionButtonHoverBorderColor = preset.actionButtonHoverBorderColor or "interactionAccent_4"
+    preset.textInputFocusBorderColor = preset.textInputFocusBorderColor or "interactionAccent_2"
+    preset.subpageUnderlineColor = preset.subpageUnderlineColor or "neutralAccent_4"
+    preset.subpageSelectedUnderlineColor = preset.subpageSelectedUnderlineColor or "interactionAccent_4"
+    preset.subpageTextColor = preset.subpageTextColor or "neutralAccent_4"
+    preset.subpageHoverTextColor = preset.subpageHoverTextColor or "interactionAccent_2"
+    self.Presets[name] = preset
+    return preset
+end
 
-    -- Window and section headings
-    title = {0.22353, 0.18431, 0.15294, 1.00}, -- #392F27
-    titleHover = {0.30980, 0.24706, 0.18824, 1.00}, -- #4F3F30
-    sectionHeaderFill = {0.25882, 0.20000, 0.14510, 1.00}, -- #423324
-    sectionHeaderText = {0.88235, 0.72157, 0.24706, 1.00}, -- #E1B83F
-
-    -- Text
-    text = {0.94118, 0.90588, 0.84314, 1.00}, -- #F0E7D7
-    muted = {0.72549, 0.66667, 0.56863, 1.00}, -- #B9AA91
-
-    -- Interaction and selection
-    interactionGold = {0.88235, 0.72157, 0.24706, 1.00}, -- #E1B83F
-    buttonSelectedBackground = {0.21961, 0.16471, 0.09412, 1.00}, -- #382A18
-    buttonSelectedBorder = {0.76863, 0.60392, 0.27059, 1.00}, -- #C49A45
-    buttonSelectedText = {0.94118, 0.90588, 0.84314, 1.00}, -- #F0E7D7; same as text, independent role
-    resizeGripIdle = {0.72549, 0.66667, 0.56863, 1.00}, -- #B9AA91; same as muted, independent role
-
-    -- Buttons, fields, and scrolling controls
-    button = {0.18824, 0.15686, 0.12941, 1.00}, -- #302820
-    buttonHover = {0.25098, 0.20000, 0.12941, 1.00}, -- #403321; keep approved hover color
-    inputShadow = {0, 0, 0, 0.55},
-    scrollTrack = {0.13, 0.11, 0.10, 0.90},
-    sliderTrack = {0.13, 0.11, 0.10, 0.90}, -- same current value as scrollTrack, independent role
-
-    -- Reorderable list rows
-    orderedRowBackground = {0.07, 0.05, 0.03, 0.58},
-    orderedRowHover = {0.88, 0.72, 0.25, 0.14},
-
-    -- Shared geometry; each value is explicit for future standalone use
+-- Shared geometry defaults are not a selectable color theme.
+Styles.GeometryDefaults = {
     edgeSize = 1,
     titleHeight = 29,
+    -- Window-title content is independently inset from its outside border.
+    -- Consumers can override these in frameHeader.padding/controlGap.
+    frameHeaderPadding = { left=13, right=8, top=2, bottom=2 },
+    frameHeaderControlGap = 5,
+    iconButtonHitWidth = 25,
+    iconButtonHitHeight = 24,
+    iconButtonVisualSize = 20,
+    iconButtonGlyphSize = 18,
     -- Empty pane headers keep only this compact structural minimum; populated
     -- headers measure their text or layout row plus the configured insets.
     paneHeaderMinHeight = 15,
@@ -107,6 +105,9 @@ Styles.Presets.warm_warcraft = {
     navigationItemInset = 8,
     navigationItemGap = 6,
     navigationItemHeight = 28,
+    mainNavigationBottomBorderHeight = 3,
+    mainNavigationSelectedBottomBorderHeight = 6,
+    subpageIndicatorHeight = 2,
     paneHeaderPaddingX = 12,
     paneHeaderPaddingY = 10,
     paneHeaderTextGap = 4,
@@ -118,61 +119,171 @@ Styles.Presets.warm_warcraft = {
     edgeOutside = 5,
 }
 
--- Midnight Flux: navy/purple surfaces and restrained sunset-orange accents.
-Styles.Presets.midnight_flux = ClonePreset(Styles.Presets.warm_warcraft)
-local flux = Styles.Presets.midnight_flux
-flux.background = {0.0510, 0.0706, 0.1569, 0.98} -- #0D1228
-flux.title = {0.1255, 0.1255, 0.2784, 1} -- #202047
-flux.titleHover = {0.1882, 0.1451, 0.3137, 1} -- #302550
-flux.panel = {0.0902, 0.1020, 0.2078, 0.95} -- #171A35
-flux.button = {0.1490, 0.1333, 0.2667, 1} -- #262244
-flux.buttonHover = {0.2235, 0.1725, 0.3608, 1} -- #392C5C
-flux.border = {0.2824, 0.2000, 0.3725, 1} -- #48335F
-flux.borderHover = {0.5961, 0.3843, 0.5176, 1} -- #986284
-flux.text = {0.9490, 0.9176, 0.9725, 1} -- #F2EAF8
-flux.muted = {0.7255, 0.7137, 0.8235, 1} -- #B9B6D2
-flux.interactionGold = {0.8980, 0.6314, 0.4000, 1} -- #E5A166
-flux.borderDrag = flux.interactionGold -- shared active accent (#E5A166)
--- Dropdown-specific palette tokens. Other presets retain the previous behavior.
-flux.dropdownFieldBorder = flux.borderHover -- lighter purple resting dropdown border (#986284)
-flux.dropdownActiveBorder = flux.interactionGold -- same soft amber active accent
-flux.dropdownPopupBorder = flux.interactionGold -- same soft amber active accent
-flux.sectionHeaderFill = flux.border -- purple header surface (#48335F)
-flux.sectionHeaderText = flux.interactionGold -- restored soft amber heading text
-flux.resizeGripIdle = {0.6549, 0.6588, 0.7529, 1} -- #A7A8C0
--- Brushfire: TreebeardCreative-inspired near-black surfaces with true-red accents.
-Styles.Presets.brushfire = ClonePreset(Styles.Presets.warm_warcraft)
-local brushfire = Styles.Presets.brushfire
-brushfire.background = {0.0431, 0.0510, 0.0627, 0.98} -- #0B0D10
-brushfire.title = {0.3412, 0.0314, 0.0314, 1.00} -- #570808
-brushfire.titleHover = {0.5922, 0.0588, 0.0706, 1.00} -- #970F12
-brushfire.panel = {0.0667, 0.0784, 0.0902, 0.95} -- #111417
-brushfire.button = {0.1255, 0.1294, 0.1451, 1.00} -- #202125
-brushfire.buttonHover = {0.2039, 0.1882, 0.2078, 1.00} -- #343035
-brushfire.border = {0.5569, 0.0784, 0.0784, 1.00} -- #8E1414
-brushfire.borderHover = {0.7569, 0.0706, 0.1216, 1.00} -- #C1121F
-brushfire.borderDrag = {0.8196, 0.1686, 0.1686, 1.00} -- #D12B2B
-brushfire.text = {0.9490, 0.9412, 0.9255, 1.00} -- #F2F0EC
-brushfire.muted = {0.7882, 0.7608, 0.7373, 1.00} -- #C9C2BC
-brushfire.sectionHeaderFill = brushfire.title -- same deep-red header background (#570808)
-brushfire.sectionHeaderText = brushfire.text -- same warm off-white text (#F2F0EC)
-brushfire.interactionGold = brushfire.borderHover -- same active red accent (#C1121F)
-brushfire.resizeGripIdle = brushfire.muted -- same subdued warm-grey accent (#C9C2BC)
-brushfire.dropdownFieldBorder = brushfire.border -- same resting control border (#8E1414)
-brushfire.dropdownActiveBorder = brushfire.interactionGold -- same active red accent (#C1121F)
-brushfire.dropdownPopupBorder = brushfire.interactionGold -- same active red accent (#C1121F)
+-- Brushfire is the first authored palette. Missing categories use the green
+-- diagnostic fallback; assigned components resolve through the named families.
+local brushfireStyle = Styles:RegisterPreset("Brushfire", defaultAllEverythingTestVariable)
+brushfireStyle.colorFactoryFields = {"canvas", "neutralAccent", "interactionAccent", "baseText"}
+brushfireStyle.colorFactoryBases = {
+    canvas = "#0d0d0d",
+    neutralAccent = "#595959",
+    interactionAccent = "#660000",
+    baseText = "#ffffff",
+}
+local factoryColors, factoryFamilies = TBU.ColorFactory.BuildFamilies(brushfireStyle.colorFactoryBases)
+brushfireStyle.colorFactoryColors = factoryColors
+brushfireStyle.colorFactoryFamilies = factoryFamilies
+-- Shared option highlights, separators, and input surfaces resolve through
+-- named palette tokens in each authored preset.
+brushfireStyle.controlOptionHighlightColor = "white"
+brushfireStyle.controlInputCanvasColor = "canvas_2"
+brushfireStyle.separatorColor = "neutralAccent_base"
 
--- Semantic typography contract (shared by all consumers):
---   primary: control labels, entered values, buttons, page titles
---   notes: section descriptions, guidance and low-emphasis information
---   header: titles in section header bands
---   disabled: currently same as notes; a separate token can be added only if needed
--- These are aliases, not additional independent color values.
+-- Brushfire components map explicitly to generated or base palette tokens.
+-- These explicit mappings retain the current Brushfire component treatment.
+brushfireStyle.mainCanvasColor = TBU.ColorFactory.ToHex(brushfireStyle.colorFactoryColors.canvas_1)
+brushfireStyle.windowBorderColor = "neutralAccent_4"
+brushfireStyle.controlBorderColor = "neutralAccent_4"
+brushfireStyle.controlContainerColor = "neutralAccent_4"
+brushfireStyle.mainNavigationButtonCanvasColor = "canvas_4"
+brushfireStyle.mainNavigationButtonInactiveCanvasColor = "canvas_2"
+brushfireStyle.mainNavigationButtonInactiveHoverCanvasColor = "canvas_3"
+brushfireStyle.mainNavigationButtonBorderColor = "neutralAccent_4"
+-- The existing red indicator is lifted two family levels from its old base.
+brushfireStyle.controlIndicatorColor = TBU.ColorFactory.ToHex(brushfireStyle.colorFactoryColors.interactionAccent_3)
+brushfireStyle.windowHighlightColor = TBU.ColorFactory.ToHex(brushfireStyle.colorFactoryColors.interactionAccent_2)
+brushfireStyle.windowInteractionColor = TBU.ColorFactory.ToHex(brushfireStyle.colorFactoryColors.interactionAccent_4)
+
+-- Text slots point directly to generated palette tokens. Text roles select a
+-- slot independently, so consumers can recolor a text category without
+-- creating another copy of a palette color. The main slot preserves today's
+-- primary controls remain white while supporting notes use neutral accent;
+-- interaction-accent text remains available for intentionally emphasized text.
+local function ConfigureTextPalette(style)
+    style.textMainColor = "baseText_1"
+    style.textNeutralAccentColor = "neutralAccent_4"
+    style.textInteractionAccentColor = "interactionAccent_4"
+    style.textColorRoleMap = {
+        primary = "textMainColor",
+        value = "textMainColor",
+        header = "textMainColor",
+        notes = "textNeutralAccentColor",
+    }
+end
+ConfigureTextPalette(brushfireStyle)
+
+-- Embersteel uses the same component-to-token relationships as Brushfire,
+-- with its own independently generated palette families.
+local embersteelStyle = Styles:RegisterPreset("Embersteel", defaultAllEverythingTestVariable, "Brushfire")
+embersteelStyle.colorFactoryFields = {"canvas", "neutralAccent", "interactionAccent", "baseText"}
+embersteelStyle.colorFactoryBases = {
+    canvas = "#0d0d0d",
+    neutralAccent = "#1e3b62",
+    interactionAccent = "#995c00",
+    baseText = "#cccccc",
+}
+local embersteelColors, embersteelFamilies = TBU.ColorFactory.BuildFamilies(embersteelStyle.colorFactoryBases)
+embersteelStyle.colorFactoryColors = embersteelColors
+embersteelStyle.colorFactoryFamilies = embersteelFamilies
+embersteelStyle.mainCanvasColor = TBU.ColorFactory.ToHex(embersteelColors.canvas_1)
+embersteelStyle.windowBorderColor = "neutralAccent_4"
+embersteelStyle.controlBorderColor = "neutralAccent_4"
+embersteelStyle.controlContainerColor = "neutralAccent_4"
+embersteelStyle.mainNavigationButtonBorderColor = "neutralAccent_4"
+embersteelStyle.subpageUnderlineColor = "neutralAccent_4"
+embersteelStyle.controlIndicatorColor = "interactionAccent_3"
+embersteelStyle.windowHighlightColor = "interactionAccent_2"
+embersteelStyle.windowInteractionColor = "interactionAccent_4"
+embersteelStyle.controlOptionHighlightColor = "white"
+embersteelStyle.controlInputCanvasColor = "canvas_2"
+embersteelStyle.separatorColor = "neutralAccent_base"
+ConfigureTextPalette(embersteelStyle)
+
+-- Warm Warcraft is an independent palette using the same component links as
+-- Brushfire and Embersteel. Its dark warm surfaces, bronze neutral family,
+-- deep red interaction family, and warm white text are an editable starting
+-- point inspired by WoW's interface palette, not copied UI artwork/colors.
+local warmWarcraftStyle = Styles:RegisterPreset("Warm Warcraft", defaultAllEverythingTestVariable, "Brushfire")
+warmWarcraftStyle.colorFactoryFields = {"canvas", "neutralAccent", "interactionAccent", "baseText"}
+warmWarcraftStyle.colorFactoryBases = {
+    canvas = "#191511",
+    neutralAccent = "#806443",
+    interactionAccent = "#660000",
+    baseText = "#fff2cc",
+}
+local warmWarcraftColors, warmWarcraftFamilies = TBU.ColorFactory.BuildFamilies(warmWarcraftStyle.colorFactoryBases)
+warmWarcraftStyle.colorFactoryColors = warmWarcraftColors
+warmWarcraftStyle.colorFactoryFamilies = warmWarcraftFamilies
+warmWarcraftStyle.mainCanvasColor = TBU.ColorFactory.ToHex(warmWarcraftColors.canvas_1)
+warmWarcraftStyle.windowBorderColor = "neutralAccent_4"
+warmWarcraftStyle.controlBorderColor = "neutralAccent_4"
+warmWarcraftStyle.controlContainerColor = "neutralAccent_4"
+warmWarcraftStyle.mainNavigationButtonBorderColor = "neutralAccent_4"
+warmWarcraftStyle.subpageUnderlineColor = "neutralAccent_4"
+warmWarcraftStyle.controlIndicatorColor = "interactionAccent_3"
+warmWarcraftStyle.windowHighlightColor = "interactionAccent_2"
+warmWarcraftStyle.windowInteractionColor = "interactionAccent_4"
+warmWarcraftStyle.controlOptionHighlightColor = "white"
+warmWarcraftStyle.controlInputCanvasColor = "canvas_2"
+warmWarcraftStyle.separatorColor = "neutralAccent_base"
+ConfigureTextPalette(warmWarcraftStyle)
+
+local function CopyRGBAColor(value)
+    if type(value) ~= "table" then return nil end
+    local red, green, blue = tonumber(value[1]), tonumber(value[2]), tonumber(value[3])
+    if not red or not green or not blue then return nil end
+    return {red, green, blue, tonumber(value[4]) or 1}
+end
+
+local function ParseHexColor(value, fallback)
+    if type(value) == "string" then
+        local hex = value:gsub("^#", "")
+        if #hex == 6 and hex:match("^%x+$") then
+            return {
+                tonumber(hex:sub(1, 2), 16) / 255,
+                tonumber(hex:sub(3, 4), 16) / 255,
+                tonumber(hex:sub(5, 6), 16) / 255,
+                1,
+            }
+        end
+    end
+    return CopyRGBAColor(fallback) or fallback
+end
+
+local TEXT_COLOR_SLOTS = {
+    textMainColor = true,
+    textNeutralAccentColor = true,
+    textInteractionAccentColor = true,
+}
+
+local function ResolveStyleColor(style, value, fallback)
+    local normalizedFallback = CopyRGBAColor(fallback) or fallback
+    if type(value) == "table" then
+        return CopyRGBAColor(value) or normalizedFallback
+    end
+    if type(value) == "string" then
+        local token = style.colorFactoryColors and style.colorFactoryColors[value]
+        if token ~= nil then
+            if type(token) == "table" then
+                return CopyRGBAColor(token) or normalizedFallback
+            end
+            return ParseHexColor(token, normalizedFallback)
+        end
+    end
+    return ParseHexColor(value, normalizedFallback)
+end
+
+-- A semantic text role maps to one of the style's named text slots. The slot
+-- then resolves its ColorFactory token at use time. Unmapped roles retain the
+-- all-text test fallback for newly added or uncategorized text.
 function Styles:GetTextColor(role, frame)
     local style = frame and self:GetForFrame(frame) or self:Get()
-    if role == "notes" or role == "value" or role == "disabled" then return style.muted or style.text end
-    if role == "header" then return style.sectionHeaderText or style.text end
-    return style.text
+    local slot = TEXT_COLOR_SLOTS[role] and role
+        or (style.textColorRoleMap and style.textColorRoleMap[role])
+    if slot and TEXT_COLOR_SLOTS[slot] then
+        local color = ResolveStyleColor(style, style[slot])
+        if color then return color end
+    end
+    return ResolveStyleColor(style, style.allTextTestVariable, style.allEverythingTestVariable)
 end
 
 -- Each consumer opts into its own preset. No consumer state is stored here;
@@ -203,6 +314,202 @@ function Styles:GetForFrame(frame)
     local owner = FindOwner(frame)
     if owner then return self:Get(self:GetConsumerPreset(owner)) end
     return self:Get()
+end
+function Styles:GetBorderColor(frameOrStyle, fallback)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or self:GetForFrame(frameOrStyle)
+    if not style then style = self:Get() end
+    return ResolveStyleColor(style, style.allBordersTestVariable, fallback or style.allEverythingTestVariable)
+end
+local function GetNamedBorderColor(styles, frameOrStyle, field, fallback)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or styles:GetForFrame(frameOrStyle)
+    if not style then style = styles:Get() end
+    return ResolveStyleColor(style, style[field], fallback) or styles:GetBorderColor(style)
+end
+function Styles:GetWindowBorderColor(frameOrStyle, fallback)
+    return GetNamedBorderColor(self, frameOrStyle, "windowBorderColor", fallback)
+end
+function Styles:GetWindowHighlightColor(frameOrStyle, fallback)
+    return GetNamedBorderColor(self, frameOrStyle, "windowHighlightColor", fallback)
+        or self:GetWindowBorderColor(frameOrStyle, fallback)
+end
+function Styles:GetWindowInteractionColor(frameOrStyle, fallback)
+    return GetNamedBorderColor(self, frameOrStyle, "windowInteractionColor", fallback)
+        or self:GetWindowBorderColor(frameOrStyle, fallback)
+end
+function Styles:GetControlBorderColor(frameOrStyle, fallback)
+    return GetNamedBorderColor(self, frameOrStyle, "controlBorderColor", fallback)
+end
+function Styles:GetTextInputFocusBorderColor(frameOrStyle, fallback)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or self:GetForFrame(frameOrStyle)
+    if not style then style = self:Get() end
+    return ResolveStyleColor(style, style.textInputFocusBorderColor, fallback)
+        or self:GetControlBorderColor(style, fallback)
+end
+function Styles:GetMainNavigationBorderColor(frameOrStyle, fallback)
+    return self:GetMainNavigationButtonBorderColor(frameOrStyle, fallback)
+end
+function Styles:GetMainNavigationButtonBorderColor(frameOrStyle, fallback)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or self:GetForFrame(frameOrStyle)
+    if not style then style = self:Get() end
+    -- Accept the previous field name as a fallback for existing consumer styles.
+    return ResolveStyleColor(style, style.mainNavigationButtonBorderColor or style.mainNavigationBorderColor, fallback)
+        or self:GetBorderColor(style)
+end
+function Styles:GetMainNavigationButtonSelectedBorderColor(frameOrStyle, fallback)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or self:GetForFrame(frameOrStyle)
+    if not style then style = self:Get() end
+    return ResolveStyleColor(style, style.mainNavigationButtonSelectedBorderColor, fallback)
+        or self:GetMainNavigationButtonBorderColor(style, fallback)
+end
+function Styles:GetMainNavigationButtonCanvasColor(frameOrStyle)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or self:GetForFrame(frameOrStyle)
+    if not style then style = self:Get() end
+    return ResolveStyleColor(style, style.mainNavigationButtonCanvasColor, style.allEverythingTestVariable)
+end
+function Styles:GetMainNavigationButtonInactiveCanvasColor(frameOrStyle)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or self:GetForFrame(frameOrStyle)
+    if not style then style = self:Get() end
+    -- The inactive shade is intentionally unset until Treebeard chooses it.
+    -- Until then, preserve the existing main-navigation canvas appearance.
+    return ResolveStyleColor(style, style.mainNavigationButtonInactiveCanvasColor,
+        self:GetMainNavigationButtonCanvasColor(style))
+end
+function Styles:GetMainNavigationButtonInactiveHoverCanvasColor(frameOrStyle)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or self:GetForFrame(frameOrStyle)
+    if not style then style = self:Get() end
+    return ResolveStyleColor(style, style.mainNavigationButtonInactiveHoverCanvasColor,
+        self:GetMainNavigationButtonInactiveCanvasColor(style))
+end
+function Styles:GetActionButtonCanvasColor(frameOrStyle)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or self:GetForFrame(frameOrStyle)
+    if not style then style = self:Get() end
+    return ResolveStyleColor(style, style.actionButtonCanvasColor, style.allEverythingTestVariable)
+end
+function Styles:GetControlThumbIdleColor(frameOrStyle)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or self:GetForFrame(frameOrStyle)
+    if not style then style = self:Get() end
+    return ResolveStyleColor(style, style.controlThumbIdleColor,
+        self:GetActionButtonCanvasColor(style))
+end
+local function GetControlColor(styles, frameOrStyle, field)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or styles:GetForFrame(frameOrStyle)
+    if not style then style = styles:Get() end
+    return ResolveStyleColor(style, style[field], style.allEverythingTestVariable)
+end
+function Styles:GetScrollbarTrackColor(frameOrStyle)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or self:GetForFrame(frameOrStyle)
+    if not style then style = self:Get() end
+    return ResolveStyleColor(style, style.scrollbarTrackColor,
+        self:GetWindowBorderColor(style))
+end
+function Styles:GetScrollbarThumbIdleColor(frameOrStyle)
+    return GetControlColor(self, frameOrStyle, "scrollbarThumbIdleColor")
+end
+function Styles:GetResizeGripIdleColor(frameOrStyle)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or self:GetForFrame(frameOrStyle)
+    if not style then style = self:Get() end
+    return ResolveStyleColor(style, style.resizeGripIdleColor,
+        self:GetWindowBorderColor(style))
+end
+function Styles:GetActionButtonPressedCanvasColor(frameOrStyle)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or self:GetForFrame(frameOrStyle)
+    if not style then style = self:Get() end
+    return ResolveStyleColor(style, style.actionButtonPressedCanvasColor, style.allEverythingTestVariable)
+end
+function Styles:GetActionButtonHoverBorderColor(frameOrStyle)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or self:GetForFrame(frameOrStyle)
+    if not style then style = self:Get() end
+    return ResolveStyleColor(style, style.actionButtonHoverBorderColor,
+        self:GetControlBorderColor(style))
+end
+function Styles:GetSubpageUnderlineColor(frameOrStyle, fallback)
+    return GetNamedBorderColor(self, frameOrStyle, "subpageUnderlineColor", fallback)
+end
+function Styles:GetSubpageSelectedUnderlineColor(frameOrStyle, fallback)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or self:GetForFrame(frameOrStyle)
+    if not style then style = self:Get() end
+    return ResolveStyleColor(style, style.subpageSelectedUnderlineColor)
+        or self:GetSubpageUnderlineColor(style, fallback)
+end
+function Styles:GetSubpageTextColor(frame)
+    local style = self:GetForFrame(frame)
+    return ResolveStyleColor(style, style.subpageTextColor)
+        or self:GetTextColor("primary", frame)
+end
+function Styles:GetSubpageHoverTextColor(frame)
+    local style = self:GetForFrame(frame)
+    return ResolveStyleColor(style, style.subpageHoverTextColor)
+        or self:GetTextColor("primary", frame)
+end
+function Styles:GetMainCanvasColor(frameOrStyle)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or self:GetForFrame(frameOrStyle)
+    if not style then style = self:Get() end
+    return ResolveStyleColor(style, style.mainCanvasColor, style.allEverythingTestVariable)
+end
+function Styles:ResolveColor(value, frameOrStyle, fallback)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or self:GetForFrame(frameOrStyle)
+    if not style then style = self:Get() end
+    return ResolveStyleColor(style, value, fallback)
+end
+function Styles:GetFrameHeaderActiveCanvasColor(frameOrStyle)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or self:GetForFrame(frameOrStyle)
+    if not style then style = self:Get() end
+    return ResolveStyleColor(style, style.frameHeaderActiveCanvasColor, style.allEverythingTestVariable)
+        or self:GetMainCanvasColor(style)
+end
+function Styles:GetControlContainerColor(frameOrStyle)
+    return GetControlColor(self, frameOrStyle, "controlContainerColor")
+end
+function Styles:GetControlIndicatorColor(frameOrStyle)
+    return GetControlColor(self, frameOrStyle, "controlIndicatorColor")
+end
+function Styles:GetControlOptionHighlightColor(frameOrStyle)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or self:GetForFrame(frameOrStyle)
+    if not style then style = self:Get() end
+    local fallback = ResolveStyleColor(style, style.allEverythingTestVariable, {0, 0, 0, 1})
+    return ResolveStyleColor(style, style.controlOptionHighlightColor, fallback)
+end
+function Styles:GetControlInputCanvasColor(frameOrStyle)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or self:GetForFrame(frameOrStyle)
+    if not style then style = self:Get() end
+    return ResolveStyleColor(style, style.controlInputCanvasColor, style.allEverythingTestVariable)
+end
+function Styles:GetSectionSurfaceColor(frameOrStyle)
+    return GetControlColor(self, frameOrStyle, "sectionSurfaceColor")
+end
+function Styles:GetSectionBorderColor(frameOrStyle)
+    return GetControlColor(self, frameOrStyle, "sectionBorderColor")
+end
+function Styles:GetRecessedInputShadowColor(frameOrStyle)
+    return GetControlColor(self, frameOrStyle, "recessedInputShadowColor")
+end
+function Styles:GetSeparatorColor(frameOrStyle)
+    local style = type(frameOrStyle) == "table" and frameOrStyle.allEverythingTestVariable
+        and frameOrStyle or self:GetForFrame(frameOrStyle)
+    if not style then style = self:Get() end
+    local fallback = ResolveStyleColor(style, style.allEverythingTestVariable, {0, 0, 0, 1})
+    return ResolveStyleColor(style, style.separatorColor, fallback)
 end
 function Styles:GetActivePreset(owner)
     return owner and self:GetConsumerPreset(owner) or self.ActivePreset
@@ -254,9 +561,8 @@ end
 
 function Styles:ApplyWindow(frame, state, presetName)
     local style = self:Get(presetName or (FindOwner(frame) and self:GetConsumerPreset(FindOwner(frame))))
-    local border = state == "drag" and style.borderDrag
-        or state == "hover" and style.borderHover or style.border
-    SetBackdrop(frame, style.background, border, style.edgeSize)
+    local border = self:GetWindowBorderColor(style)
+    SetBackdrop(frame, self:GetMainCanvasColor(style), border, style.edgeSize)
     if frame._tbuSplitTitleAndBodyBorder or frame._tbuHideWindowBorder then
         frame:SetBackdropBorderColor(0, 0, 0, 0)
     end
@@ -268,8 +574,10 @@ function Styles:ApplyWindow(frame, state, presetName)
         end
     end
     if frame.frameHeader and frame.frameHeader.bg then
-        local titleColor = state == "normal" and style.title or style.titleHover
-        frame.frameHeader.bg:SetVertexColor(unpack(titleColor))
+        local headerFill = (state == "hover" or state == "drag")
+            and self:GetFrameHeaderActiveCanvasColor(style)
+            or self:GetMainCanvasColor(style)
+        frame.frameHeader.bg:SetVertexColor(unpack(headerFill))
         for _, edge in ipairs(frame.frameHeader.borderEdges or {}) do
             edge:SetVertexColor(unpack(border))
         end
@@ -281,20 +589,22 @@ function Styles:ApplyPanel(frame, presetName)
     -- switches style, resolve the current owner on every repaint.
     local owner = FindOwner(frame)
     local style = self:Get(presetName or (owner and self:GetConsumerPreset(owner)))
-    SetBackdrop(frame, style.panel, style.border, style.edgeSize)
+    SetBackdrop(frame, self:GetMainCanvasColor(style), self:GetWindowBorderColor(style), style.edgeSize)
     self:RegisterVisual(frame, function(target)
         local currentOwner = FindOwner(target)
         local current = Styles:Get(presetName or (currentOwner and Styles:GetConsumerPreset(currentOwner)))
-        SetBackdrop(target, current.panel, current.border, current.edgeSize)
+        SetBackdrop(target, Styles:GetMainCanvasColor(current), Styles:GetWindowBorderColor(current), current.edgeSize)
     end)
 end
 
 function Styles:CreateSeparator(parent, anchor, presetName)
     local style = self:Get(presetName)
-    local line = self:CreateFlatTexture(parent, "BORDER", style.border)
+    local line = self:CreateFlatTexture(parent, "BORDER", self:GetSeparatorColor(style))
     line:SetHeight(1)
     self:RegisterVisual(line, function(texture)
-        texture:SetVertexColor(unpack(Styles:Get(presetName or (FindOwner(texture) and Styles:GetConsumerPreset(FindOwner(texture)))).border))
+        local owner = FindOwner(texture)
+        local currentStyle = Styles:Get(presetName or (owner and Styles:GetConsumerPreset(owner)))
+        texture:SetVertexColor(unpack(Styles:GetSeparatorColor(currentStyle)))
     end)
     if anchor == "bottom" then
         line:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", 0, 0)
@@ -313,29 +623,25 @@ function Styles:ApplyButton(button, hovered, presetName, selected)
     local enabled = not button.IsEnabled or button:IsEnabled()
     local pressed = enabled and button.tbuPressed == true
     local isSelected = selected == nil and button.tbuSelected == true or selected == true
-    local selectedFill = isSelected and (style.buttonSelectedBackground or style.buttonHover)
-    local selectedBorder = isSelected and (style.buttonSelectedBorder or style.borderHover)
-    local fill = pressed and style.background
-        or selectedFill
-        or (enabled and hovered and style.buttonHover or style.button)
-    local border = pressed and style.borderDrag
-        or selectedBorder
-        or (isSelected and style.borderHover)
-        or (enabled and hovered and style.borderHover or style.border)
+    local fill = pressed
+        and self:GetActionButtonPressedCanvasColor(style)
+        or self:GetActionButtonCanvasColor(style)
+    local border = hovered
+        and self:GetActionButtonHoverBorderColor(style)
+        or self:GetControlBorderColor(style)
     -- Controlled hudcraft v1.0.18 border comparison: keep the normal
     -- interaction colors but use a single native WHITE8X8 backdrop edge.
     -- Avoid creating independent overlay textures on real action buttons.
-    button:SetBackdrop({ bgFile = WHITE, edgeFile = WHITE, edgeSize = 1 })
-    button:SetBackdropColor(unpack(fill))
-    button:SetBackdropBorderColor(unpack(border))
+    local visual = button.visualFrame or button
+    visual:SetBackdrop({ bgFile = WHITE, edgeFile = WHITE, edgeSize = 1 })
+    visual:SetBackdropColor(unpack(fill))
+    visual:SetBackdropBorderColor(unpack(border))
     -- Older builds may have four-edge textures on a reused button.
     if button._tbuInnerBorder then
         for _, edge in ipairs(button._tbuInnerBorder) do edge:Hide() end
     end
     if button.label then
-        local selectedText = isSelected and style.buttonSelectedText
-        local rgb = enabled and (pressed and style.muted or selectedText or style.text) or style.muted
-        button.label:SetTextColor(unpack(rgb))
+        button.label:SetTextColor(unpack(self:GetTextColor("primary", button.label)))
         button.label:SetAlpha(enabled and 1 or 0.60)
     end
 end
@@ -354,7 +660,7 @@ function Styles:CreateButton(parent, label, width, onClick, presetName, labelOpt
     local text = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     text:SetPoint("CENTER", 0, 0)
     text:SetText(label)
-    text:SetTextColor(unpack(style.text))
+    text:SetTextColor(unpack(self:GetTextColor("primary", text)))
     button.label = text
     button.labelOptions = type(labelOptions) == "table" and labelOptions or {}
     button.labelOptions.wrap = button.labelOptions.wrap == true
@@ -422,5 +728,45 @@ function Styles:CreateButton(parent, label, width, onClick, presetName, labelOpt
         Repaint(b)
         if onClick then onClick(b, ...) end
     end)
+    return button
+end
+
+-- Icon buttons keep a generous mouse target while drawing a compact, styleable
+-- button outline independently from the icon artwork.
+function Styles:CreateIconButton(parent, assetName, onClick, presetName, options)
+    options = type(options) == "table" and options or {}
+    local style = self:Get(presetName)
+    local hitWidth = math.max(1, tonumber(options.hitWidth) or style.iconButtonHitWidth or 25)
+    local hitHeight = math.max(1, tonumber(options.hitHeight) or style.iconButtonHitHeight or 24)
+    local visualSize = math.max(1, tonumber(options.visualSize) or style.iconButtonVisualSize or 20)
+    local glyphSize = math.max(1, tonumber(options.glyphSize) or style.iconButtonGlyphSize or 18)
+    local button = self:CreateButton(parent, "", hitWidth, onClick, presetName)
+    button:SetSize(hitWidth, hitHeight)
+    button.label:Hide()
+
+    local visual = TBU:CreateBackdropFrame("Frame", button)
+    visual:SetSize(visualSize, visualSize)
+    visual:SetPoint("CENTER", button, "CENTER", 0, 0)
+    button.visualFrame = visual
+    -- The larger Button is only the mouse target; all visible chrome belongs
+    -- to the smaller centered visual frame.
+    button:SetBackdropColor(0, 0, 0, 0)
+    button:SetBackdropBorderColor(0, 0, 0, 0)
+
+    local glyph = visual:CreateTexture(nil, "OVERLAY")
+    glyph:SetTexture(TBU:GetAssetPath(assetName .. ".png"))
+    glyph:SetSize(glyphSize, glyphSize)
+    glyph:SetPoint("CENTER", visual, "CENTER", 0, 0)
+    button.icon = glyph
+    local function RepaintGlyph()
+        glyph:SetVertexColor(unpack(Styles:GetControlIndicatorColor(button)))
+    end
+    self:RegisterVisual(glyph, RepaintGlyph)
+    button:HookScript("OnEnter", RepaintGlyph)
+    button:HookScript("OnLeave", RepaintGlyph)
+    button:HookScript("OnMouseDown", RepaintGlyph)
+    button:HookScript("OnMouseUp", RepaintGlyph)
+    RepaintGlyph()
+    self:ApplyButton(button, false, presetName)
     return button
 end

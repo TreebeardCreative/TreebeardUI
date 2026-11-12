@@ -1,4 +1,4 @@
--- TreebeardUI v0.1.75: reusable library, no SavedVariables or slash commands.
+-- TreebeardUI v0.2.14: reusable library, no SavedVariables or slash commands.
 local addonName, private = ...
 local registryNames = { "TBUIRegistry", "TreebeardUIRegistry", "TumbleManeUIRegistry" }
 local registry
@@ -20,7 +20,7 @@ if type(registry) ~= "table" or registry.PROTOCOL ~= 1 then
     registry = { PROTOCOL = 1, runtimes = {} }
 end
 for _, name in ipairs(registryNames) do _G[name] = registry end
-local VERSION, API = "0.1.75", 1
+local VERSION, API = "0.2.14", 1
 local runtimeKey = tostring(API) .. ":" .. VERSION
 local previous = registry.runtimes[runtimeKey]
 local standalone = addonName == "TreebeardUI" or addonName == "TumbleManeUI"
@@ -79,9 +79,12 @@ end
 function TBU:GetThemeColor(key)
     local styles = self.WindowStyles
     local style = styles and styles:Get()
-    local value = style and (key == "secondary" and style.interactionGold or style[key])
-    if type(value) == "table" then return unpack(value) end
-    return 0.85, 0.67, 0.33, 1
+    local value = style and type(key) == "string"
+        and (key == "secondary" and style.interactionGold or style[key])
+    local resolved = styles and styles.ResolveColor
+        and styles:ResolveColor(value, style, style and style.allEverythingTestVariable)
+    if type(resolved) == "table" then return unpack(resolved) end
+    return 0, 1, 0, 1
 end
 local providers = {}
 function TBU:RegisterConsumer(owner, opts)

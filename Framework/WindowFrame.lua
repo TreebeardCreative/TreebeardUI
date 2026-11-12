@@ -5,7 +5,7 @@ local TBU = (private.__TBUIRuntime or private.__TreebeardUIRuntime) or private
 
 -- Common movable window host. Content and diagnostic logging live elsewhere.
 -- Shared border/title interaction deliberately resembles movable group drag handles,
--- but uses muted grayscale feedback and is never controlled by Group lock state.
+-- but uses the current allEverythingTestVariable style value and is never controlled by Group lock state.
 TBU.WindowFrame = {}
 local Host = TBU.WindowFrame
 local Styles = TBU.WindowStyles
@@ -23,8 +23,10 @@ end
 local function SnapWindowRectangle(frame, preserveLogicalSize)
     local left, right = frame:GetLeft(), frame:GetRight()
     local bottom, top = frame:GetBottom(), frame:GetTop()
-    local parentLeft, parentBottom = UIParent:GetLeft(), UIParent:GetBottom()
-    if not (left and right and bottom and top and parentLeft and parentBottom) then return false end
+    local parentLeft, parentRight = UIParent:GetLeft(), UIParent:GetRight()
+    local parentBottom, parentTop = UIParent:GetBottom(), UIParent:GetTop()
+    if not (left and right and bottom and top and parentLeft and parentRight
+        and parentBottom and parentTop) then return false end
 
     -- Anchor offsets use the parent's scale; local frame dimensions use the
     -- frame's effective scale. Align all four visible edges, then derive the
@@ -39,8 +41,11 @@ local function SnapWindowRectangle(frame, preserveLogicalSize)
     local heightPixels = math.max(1, topPixel - bottomPixel)
 
     frame:ClearAllPoints()
-    frame:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT",
-        leftPixel / parentScale, bottomPixel / parentScale)
+    -- Keep one stable body anchor regardless of title placement or collapse
+    -- state. Derive its offsets from the snapped rectangle's top-right edge.
+    frame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT",
+        rightPixel / parentScale - (parentRight - parentLeft),
+        topPixel / parentScale - (parentTop - parentBottom))
     frame:SetSize(widthPixels / frameScale, heightPixels / frameScale)
     if not preserveLogicalSize then
         if frame.expandedWidth ~= nil then frame.expandedWidth = frame:GetWidth() end
@@ -91,20 +96,41 @@ local function CharacterWindowState(owner)
     return state
 end
 
+local function ResolveFrameHeaderPadding(style, requested)
+    local defaults = style.frameHeaderPadding or {}
+    requested = type(requested) == "table" and requested or {}
+    local horizontal = tonumber(requested.horizontal or requested.x)
+    local vertical = tonumber(requested.vertical or requested.y)
+    return {
+        left = math.max(0, tonumber(requested.left) or horizontal
+            or tonumber(defaults.left) or 13),
+        right = math.max(0, tonumber(requested.right) or horizontal
+            or tonumber(defaults.right) or 8),
+        top = math.max(0, tonumber(requested.top) or vertical
+            or tonumber(defaults.top) or 2),
+        bottom = math.max(0, tonumber(requested.bottom) or vertical
+            or tonumber(defaults.bottom) or 2),
+    }
+end
+
 -- Title chrome is an optional component of the window assembly. Keeping its
 -- construction separate lets a consumer request a bare frame without
 -- creating title controls or a title label.
-local function CreateFrameHeader(parent, title, style, outline)
+local function CreateFrameHeader(parent, title, style, outline, padding)
     local header = CreateFrame("Frame", nil, parent)
     header:SetHeight(style.titleHeight)
     header:EnableMouse(true)
-    header.bg = Styles:CreateFlatTexture(header, "BACKGROUND", style.title)
+    header.bg = Styles:CreateFlatTexture(header, "BACKGROUND", Styles:GetMainCanvasColor(style))
     header.bg:SetAllPoints(header)
 
     local heading = header:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    heading:SetPoint("LEFT", header, "LEFT", 13, 0)
+    heading:SetPoint("LEFT", header, "LEFT", padding.left, 0)
     heading:SetText(title or "")
-    heading:SetTextColor(unpack(style.text))
+    local function repaintHeading(target)
+        target:SetTextColor(unpack(Styles:GetTextColor("header", target)))
+    end
+    Styles:RegisterVisual(heading, repaintHeading)
+    repaintHeading(heading)
     heading:SetJustifyH("LEFT")
     heading:SetJustifyV("MIDDLE")
     heading:SetWordWrap(true)
@@ -114,7 +140,7 @@ local function CreateFrameHeader(parent, title, style, outline)
         local edgeSize = style.edgeSize or 1
         local edges = {}
         local function AddEdge(point1, relativePoint1, point2, relativePoint2, width, height)
-            local edge = Styles:CreateFlatTexture(header, "OVERLAY", style.border)
+            local edge = Styles:CreateFlatTexture(header, "OVERLAY", Styles:GetWindowBorderColor(style))
             edge:SetPoint(point1, header, relativePoint1, 0, 0)
             edge:SetPoint(point2, header, relativePoint2, 0, 0)
             if width then edge:SetWidth(width) end
@@ -158,10 +184,14 @@ local function NormalizeCreateConfig(config)
     local surface = type(config.surface) == "table" and config.surface or {}
     local options = {
         frameHeader = frameHeader and (frameHeader.visibility or "always") or "never",
-        frameHeaderPosition = frameHeader and (frameHeader.position or DEFAULTS.frameHeaderPosition),
+        -- Keep an omitted position unset here so consumer-saved position can
+        -- take precedence; fall back to the framework default during create.
+        frameHeaderPosition = frameHeader and frameHeader.position,
         frameHeaderAnchor = frameHeader and frameHeader.anchor,
         frameHeaderWidth = frameHeader and frameHeader.width and
             (frameHeader.width.mode == "content" and "content" or frameHeader.width.value),
+        frameHeaderPadding = frameHeader and frameHeader.padding,
+        frameHeaderControlGap = frameHeader and frameHeader.controlGap,
         closeButton = titleControls.close == true,
         collapseButton = titleControls.minimize == true,
         movable = interaction.movable ~= false,
@@ -239,7 +269,20 @@ function Host:Create(config)
     end
     local preset = nil -- use live per-owner preset for window chrome
     local style = Styles:Get(Styles:GetConsumerPreset(owner))
-    local root = TBU:CreateBackdropFrame("Frame", UIParent)
+    local frameHeaderPadding = ResolveFrameHeaderPadding(style, options.frameHeaderPadding)
+    local frameHeaderControlGap = math.max(0, tonumber(options.frameHeaderControlGap)
+        or tonumber(style.frameHeaderControlGap) or 5)
+    -- Keep the basic body and its optional title as sibling surfaces. The
+    -- body can fade out while collapsed without also hiding its title chrome.
+    local assembly = CreateFrame("Frame", nil, UIParent)
+    assembly:SetSize(1, 1)
+    assembly:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+    assembly:SetFrameStrata("DIALOG")
+    assembly:EnableMouse(false)
+    assembly:SetClampedToScreen(false)
+    assembly.storageOwner = owner
+    local root = TBU:CreateBackdropFrame("Frame", assembly)
+    root.frameAssembly = assembly
     root._tbuHideWindowBorder = frameBorderMode == "none"
     root._tbuSurfaceOptions = options.surface or {}
     root.windowKey = key
@@ -254,8 +297,10 @@ function Host:Create(config)
         scale = tonumber(scale) or 1
         scale = math.max(0.75, math.min(1.10, scale))
         self:SetScale(scale)
+        if self.frameHeader then self.frameHeader:SetScale(scale) end
         self:SetClampedToScreen(true)
         SnapWindowRectangle(self, true)
+        if self.frameHeader then self:SetFrameHeaderPosition(self.frameHeaderPosition, self.frameHeaderAnchor) end
     end
     local configuredMinWidth = tonumber(options.minWidth)
     local configuredMinHeight = tonumber(options.minHeight)
@@ -499,8 +544,10 @@ function Host:Create(config)
 
     local heading
     if frameHeaderMode ~= "never" then
-        header, heading = CreateFrameHeader(root, title, style, true)
+        header, heading = CreateFrameHeader(assembly, title, style, true, frameHeaderPadding)
         root.frameHeader = header
+        header.storageOwner = owner
+        header:Hide()
         if boundaryHoverMode and header.SetHitRectInsets then
             local hoverOutside = style.edgeOutside or 5
             header:SetHitRectInsets(-hoverOutside, -hoverOutside, -hoverOutside, -hoverOutside)
@@ -531,7 +578,7 @@ function Host:Create(config)
         local edges = {}
         local edgeSize = style.edgeSize or 1
         local function AddEdge(point1, relativePoint1, point2, relativePoint2, width, height)
-            local edge = Styles:CreateFlatTexture(bodyBorder, "OVERLAY", style.border)
+            local edge = Styles:CreateFlatTexture(bodyBorder, "OVERLAY", Styles:GetWindowBorderColor(style))
             edge:SetPoint(point1, bodyBorder, relativePoint1, 0, 0)
             edge:SetPoint(point2, bodyBorder, relativePoint2, 0, 0)
             if width then edge:SetWidth(width) end
@@ -653,6 +700,69 @@ function Host:Create(config)
         header:SetWidth(math.max(1, math.min(width, math.max(1, screenWidth - 20))))
     end
 
+    local function UpdateCollapsedClampInsets()
+        if not header or not root.collapsed then
+            root:SetClampRectInsets(0, 0, 0, 0)
+            return
+        end
+
+        -- The header is an external sibling, so the body's normal screen
+        -- clamp does not account for it. Expand the clamp rectangle to the
+        -- union of body + header while collapsed, keeping the title visible
+        -- when the user drags the collapsed window against a screen edge.
+        local bodyLeft, bodyRight = root:GetLeft(), root:GetRight()
+        local bodyBottom, bodyTop = root:GetBottom(), root:GetTop()
+        local headerLeft, headerRight = header:GetLeft(), header:GetRight()
+        local headerBottom, headerTop = header:GetBottom(), header:GetTop()
+        if not (bodyLeft and bodyRight and bodyBottom and bodyTop
+            and headerLeft and headerRight and headerBottom and headerTop) then
+            return
+        end
+
+        root:SetClampRectInsets(
+            math.min(0, headerLeft - bodyLeft),
+            math.max(0, headerRight - bodyRight),
+            math.max(0, headerTop - bodyTop),
+            math.min(0, headerBottom - bodyBottom)
+        )
+
+        -- The clamp update can synchronously reposition the body. Re-read the
+        -- composition bounds before calculating any corrective movement.
+        bodyLeft, bodyRight = root:GetLeft(), root:GetRight()
+        bodyBottom, bodyTop = root:GetBottom(), root:GetTop()
+        headerLeft, headerRight = header:GetLeft(), header:GetRight()
+        headerBottom, headerTop = header:GetBottom(), header:GetTop()
+        if not (bodyLeft and bodyRight and bodyBottom and bodyTop
+            and headerLeft and headerRight and headerBottom and headerTop) then
+            return
+        end
+
+        -- Applying new clamp insets constrains the next drag, but the frame
+        -- may already be beyond that new boundary. Bring the combined visible
+        -- rectangle back onscreen now so a title that was clipped at collapse
+        -- can be recovered without requiring an invisible drag handle.
+        local screenLeft, screenRight = UIParent:GetLeft(), UIParent:GetRight()
+        local screenBottom, screenTop = UIParent:GetBottom(), UIParent:GetTop()
+        if not (screenLeft and screenRight and screenBottom and screenTop) then return end
+        local left = math.min(bodyLeft, headerLeft)
+        local right = math.max(bodyRight, headerRight)
+        local bottom = math.min(bodyBottom, headerBottom)
+        local top = math.max(bodyTop, headerTop)
+        local offsetX, offsetY = 0, 0
+        if left < screenLeft then offsetX = screenLeft - left end
+        if right + offsetX > screenRight then offsetX = screenRight - right end
+        if bottom < screenBottom then offsetY = screenBottom - bottom end
+        if top + offsetY > screenTop then offsetY = screenTop - top end
+        if math.abs(offsetX) > 0.01 or math.abs(offsetY) > 0.01 then
+            local point, relativeTo, relativePoint, x, y = root:GetPoint(1)
+            if point and relativeTo and relativePoint then
+                root:ClearAllPoints()
+                root:SetPoint(point, relativeTo, relativePoint,
+                    (tonumber(x) or 0) + offsetX, (tonumber(y) or 0) + offsetY)
+            end
+        end
+    end
+
     local function SetBodyBorderBounds()
         if not bodyBorder or not header then return end
         bodyBorder:ClearAllPoints()
@@ -744,6 +854,33 @@ function Host:Create(config)
         end
     end
 
+    local function SetCollapsedHeaderSeam(collapsed)
+        if not (header and header.borderEdges) then return end
+        local edgeIndex = ({top=4, left=3, bottom=1, right=2})[root.frameHeaderPosition or "top"]
+        local edge = edgeIndex and header.borderEdges[edgeIndex]
+        if not edge then return end
+        edge:ClearAllPoints()
+        if not collapsed then
+            edge:Hide()
+            return
+        end
+        local position = root.frameHeaderPosition or "top"
+        if position == "top" then
+            edge:SetPoint("BOTTOMLEFT", header, "BOTTOMLEFT", 0, 0)
+            edge:SetPoint("BOTTOMRIGHT", header, "BOTTOMRIGHT", 0, 0)
+        elseif position == "right" then
+            edge:SetPoint("TOPLEFT", header, "TOPLEFT", 0, 0)
+            edge:SetPoint("BOTTOMLEFT", header, "BOTTOMLEFT", 0, 0)
+        elseif position == "bottom" then
+            edge:SetPoint("TOPLEFT", header, "TOPLEFT", 0, 0)
+            edge:SetPoint("TOPRIGHT", header, "TOPRIGHT", 0, 0)
+        else -- left
+            edge:SetPoint("TOPRIGHT", header, "TOPRIGHT", 0, 0)
+            edge:SetPoint("BOTTOMRIGHT", header, "BOTTOMRIGHT", 0, 0)
+        end
+        edge:Show()
+    end
+
     -- One reversible anchor policy for every shared window instance. Both
     -- title label and action buttons are header children and move together.
     function root:SetFrameHeaderPosition(position, anchor)
@@ -760,8 +897,10 @@ function Host:Create(config)
         self.frameHeaderPosition = position
         self.frameHeaderAnchor = frameHeaderAnchor
         SetFrameHeaderAnchors()
+        UpdateCollapsedClampInsets()
         SetFrameHeaderBackgroundBounds()
         SetFrameHeaderBorderBounds()
+        if root.collapsed then SetCollapsedHeaderSeam(true) end
         SetBodyBorderBounds()
         if self.UpdateBoundaryTitleSeam then self:UpdateBoundaryTitleSeam() end
         -- Title chrome is attached outside the basic frame in either mode;
@@ -783,6 +922,7 @@ function Host:Create(config)
         if anchor then frameHeaderAnchor = anchor end
         self.frameHeaderAnchor = frameHeaderAnchor
         SetFrameHeaderAnchors()
+        UpdateCollapsedClampInsets()
         if self.PlaceResizeGrip then self:PlaceResizeGrip() end
         return true
     end
@@ -797,8 +937,8 @@ function Host:Create(config)
     end
     function root:RefreshFrameHeaderVisibility()
         if not header then return end
-        local visible = frameHeaderMode == "always"
-            or (frameHeaderMode == "hover" and (hovering or dragging or resizing or self.collapsed))
+        local visible = self:IsShown() and (frameHeaderMode == "always"
+            or (frameHeaderMode == "hover" and (hovering or dragging or resizing or self.collapsed)))
         header:SetShown(visible)
     end
     function root:SetFrameHeaderVisibility(mode)
@@ -844,7 +984,8 @@ function Host:Create(config)
             headerRegion:SetPoint("TOPLEFT", pane, "TOPLEFT", 1, -1)
             headerRegion:SetPoint("TOPRIGHT", pane, "TOPRIGHT", -1, -1)
             headerRegion:SetHeight(headerHeight)
-            local headerFill = sectionHeader and paneStyle.sectionHeaderFill or paneStyle.panel
+            local headerFill = sectionHeader and paneStyle.sectionHeaderFill
+                or Styles:GetMainCanvasColor(paneStyle)
             local fill = Styles:CreateFlatTexture(headerRegion, "BACKGROUND", headerFill)
             fill:SetAllPoints(headerRegion)
             Styles:RegisterVisual(fill, function(target)
@@ -855,7 +996,8 @@ function Host:Create(config)
                     currentOwner = currentOwner.GetParent and currentOwner:GetParent() or nil
                 end
                 local currentStyle = Styles:Get(currentOwner and Styles:GetConsumerPreset(currentOwner))
-                local color = sectionHeader and currentStyle.sectionHeaderFill or currentStyle.panel
+                local color = sectionHeader and currentStyle.sectionHeaderFill
+                    or Styles:GetMainCanvasColor(currentStyle)
                 target:SetVertexColor(unpack(color))
             end)
             Styles:CreateSeparator(headerRegion, "bottom", nil)
@@ -1197,10 +1339,12 @@ function Host:Create(config)
             opacity = math.max(0, math.min(100, opacity)) / 100
             return {red, green, blue, opacity}
         end
-        local background = ReadSurfaceColor("background", style.background)
-        local normalBorder = ReadSurfaceColor("border", style.border)
-        local hoverBorder = ReadSurfaceColor("hoverBorder", style.borderHover or style.border)
-        local border = current == "drag" and style.borderDrag or current == "hover" and hoverBorder or normalBorder
+        local background = ReadSurfaceColor("background", Styles:GetMainCanvasColor(style))
+        local normalBorder = ReadSurfaceColor("border", Styles:GetWindowBorderColor(style))
+        local hoverBorder = ReadSurfaceColor("hoverBorder", Styles:GetWindowHighlightColor(style))
+        local interactionBorder = ReadSurfaceColor("interactionBorder", Styles:GetWindowInteractionColor(style))
+        local border = current == "drag" and interactionBorder
+            or current == "hover" and hoverBorder or normalBorder
         root:SetBackdropColor(unpack(background))
         ApplyBorderColor(border)
         if root.RefreshFrameHeaderVisibility then root:RefreshFrameHeaderVisibility() end
@@ -1221,12 +1365,61 @@ function Host:Create(config)
         if window.RefreshResizeGrip then window:RefreshResizeGrip() end
     end)
 
+    local function CaptureCollapseGeometry(stage)
+        if not root._captureCollapseGeometry then return end
+        local point, relativeTo, relativePoint, x, y = root:GetPoint(1)
+        local headerPoint, headerRelativeTo, headerRelativePoint, headerX, headerY
+        if header then
+            headerPoint, headerRelativeTo, headerRelativePoint, headerX, headerY = header:GetPoint(1)
+        end
+        root._lastCollapseGeometryTrace[#root._lastCollapseGeometryTrace + 1] = {
+            stage = stage,
+            collapsed = root.collapsed,
+            rootPoint = point,
+            rootRelativePoint = relativePoint,
+            rootX = x,
+            rootY = y,
+            rootLeft = root:GetLeft(),
+            rootRight = root:GetRight(),
+            rootTop = root:GetTop(),
+            rootBottom = root:GetBottom(),
+            rootWidth = root:GetWidth(),
+            rootHeight = root:GetHeight(),
+            expandedHeight = root.expandedHeight,
+            rootScale = EffectiveScale(root),
+            uiScale = EffectiveScale(UIParent),
+            headerPoint = headerPoint,
+            headerRelativePoint = headerRelativePoint,
+            headerX = headerX,
+            headerY = headerY,
+            headerLeft = header and header:GetLeft(),
+            headerRight = header and header:GetRight(),
+            headerTop = header and header:GetTop(),
+            headerBottom = header and header:GetBottom(),
+            savedY = root._lastSavedWindowPosition and root._lastSavedWindowPosition.y,
+        }
+    end
+
     local function SavePosition()
         local charState = CharacterWindowState(owner)
         if not charState then return end
         local point, _, relativePoint, x, y = root:GetPoint(1)
         if point and relativePoint and type(x) == "number" and type(y) == "number" then
+            -- When a bottom-attached title is collapsed, the root has been
+            -- translated so the body's bottom edge (and thus the title) stays
+            -- fixed. Persist the expanded root anchor so reload + collapse
+            -- reconstructs that same title position from the full-size body.
+            if root.collapsed and root.frameHeaderPosition == "bottom"
+                and point == "TOPRIGHT" then
+                local expandedHeight = tonumber(root.expandedHeight) or root:GetHeight() or 0
+                local currentHeight = tonumber(root:GetHeight()) or expandedHeight
+                y = y + (expandedHeight - currentHeight)
+                    * EffectiveScale(root) / EffectiveScale(UIParent)
+            end
             charState.windowPositions[key] = {
+                point = point, relativePoint = relativePoint, x = x, y = y,
+            }
+            root._lastSavedWindowPosition = {
                 point = point, relativePoint = relativePoint, x = x, y = y,
             }
         end
@@ -1237,14 +1430,18 @@ function Host:Create(config)
             if root.collapsed or not resizeEnabled then
                 grip:Hide()
             else
-                -- Keep each hit target active while its small glyph stays hidden
-                -- until the window or that specific grip is hovered.
+                -- Keep the resize affordance visible from initial creation so
+                -- users can discover resizing without first finding a hover zone.
                 grip:Show()
                 if grip.icon then
                     local active = resizing and activeResizeGrip == grip
-                    local gold = (hoverEnabled and grip:IsMouseOver()) or active
-                    grip.icon:SetVertexColor(unpack(gold and style.interactionGold or style.resizeGripIdle))
-                    grip.icon:SetShown((hoverEnabled and (hovering or dragging or gold)) or active)
+                    local gripHovered = hoverEnabled and grip:IsMouseOver()
+                    local highlighted = hoverEnabled and (hovering or dragging or gripHovered)
+                    local gripColor = active and Styles:GetWindowInteractionColor(style)
+                        or highlighted and Styles:GetWindowHighlightColor(style)
+                        or Styles:GetResizeGripIdleColor(style)
+                    grip.icon:SetVertexColor(unpack(gripColor))
+                    grip.icon:Show()
                 end
             end
         end
@@ -1650,67 +1847,48 @@ function Host:Create(config)
     -- interaction surface; no per-window resize code is needed.
     function root:CancelResize() EndResize() end
 
-    -- Collapse pins the title-side corner so its controls stay in place.
-    -- Resizing pins the opposite edge or corner of its active grip.
-    local function PinTitleCorner()
-        local right = root:GetRight()
-        local parentRight = UIParent:GetRight()
-        if not right or not parentRight then return false end
-        local titleAnchoredAtBottom = root.frameHeaderPosition == "bottom"
-            or (root.frameHeaderPosition == "right" and root.frameHeaderAnchor == "bottom")
-        if titleAnchoredAtBottom then
-            local bottom, parentBottom = root:GetBottom(), UIParent:GetBottom()
-            if not bottom or not parentBottom then return false end
-            root:ClearAllPoints()
-            root:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", right - parentRight, bottom - parentBottom)
-        else
-            local top, parentTop = root:GetTop(), UIParent:GetTop()
-            if not top or not parentTop then return false end
-            root:ClearAllPoints()
-            root:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", right - parentRight, top - parentTop)
-        end
-        return true
-    end
-
-
-    -- Window action glyphs are framework-owned assets. The surrounding button
-    -- supplies hover, pressed and disabled states; glyph tint follows the same
-    -- active style as the window controls without a separate palette.
-    local function SetWindowButtonGlyph(button, assetName)
-        button.label:SetText("")
-        local glyph = button:CreateTexture(nil, "OVERLAY")
-        glyph:SetTexture(TBU:GetAssetPath(assetName .. ".png"))
-        glyph:SetSize(16, 16)
-        glyph:SetPoint("CENTER", button, "CENTER", 0, 0)
-        local function RepaintGlyph(target)
-            local current = Styles:GetForFrame(target)
-            glyph:SetVertexColor(unpack((target.tbuPressed or target:IsMouseOver())
-                and (current.interactionGold or current.borderHover) or current.text))
-        end
-        Styles:RegisterVisual(glyph, function() RepaintGlyph(button) end)
-        button:HookScript("OnEnter", RepaintGlyph)
-        button:HookScript("OnLeave", RepaintGlyph)
-        button:HookScript("OnMouseDown", RepaintGlyph)
-        button:HookScript("OnMouseUp", RepaintGlyph)
-        RepaintGlyph(button)
-        return glyph
-    end
-
     function root:SetCollapsed(collapsed)
         -- A bare frame has no title-bar surface to collapse into.
         if not header or options.collapseButton == false then return false end
         collapsed = collapsed and true or false
-        if self.collapsed ~= collapsed then
-            if PinTitleCorner() then SavePosition() end
+        local wasCollapsed = self.collapsed
+        local traceBottomTransition = self.frameHeaderPosition == "bottom" and wasCollapsed ~= collapsed
+        if traceBottomTransition then
+            self._lastCollapseGeometryTrace = {}
+            self._captureCollapseGeometry = true
+            CaptureCollapseGeometry("before-transition")
+        end
+        if not wasCollapsed and collapsed then
+            self._expandedAlpha = self:GetAlpha()
         end
         self.collapsed = collapsed
         if self.collapsed then
             content:Hide()
-            self:SetHeight(header:GetHeight() + 2)
+            -- Keep the body rectangle at its expanded size while hidden. The
+            -- sibling title bar can then change sides without using a
+            -- title-height body rectangle as its anchor reference.
+            self:EnableMouse(false)
+            content:EnableMouse(false)
+            for _, edge in ipairs({top, bottom, left, right}) do
+                edge:EnableMouse(false)
+            end
+            self:SetAlpha(0)
+            SetCollapsedHeaderSeam(true)
         else
-            self:SetHeight(self.expandedHeight)
+            self:SetClampRectInsets(0, 0, 0, 0)
+            self:EnableMouse(true)
+            content:EnableMouse(true)
+            for _, edge in ipairs({top, bottom, left, right}) do
+                edge:EnableMouse(true)
+            end
             content:Show()
+            if wasCollapsed then
+                self:SetAlpha(self._expandedAlpha or 1)
+                SetCollapsedHeaderSeam(false)
+            end
         end
+        UpdateCollapsedClampInsets()
+        CaptureCollapseGeometry("after-clamp-correction")
         local charState = CharacterWindowState(owner)
         if charState then charState.windowCollapsed[key] = self.collapsed end
         if self.collapseButton then
@@ -1718,26 +1896,26 @@ function Host:Create(config)
         end
         if self.RefreshFrameHeaderVisibility then self:RefreshFrameHeaderVisibility() end
         if self.RefreshResizeGrip then self:RefreshResizeGrip() end
+        SavePosition()
+        CaptureCollapseGeometry("after-save-position")
+        if traceBottomTransition then self._captureCollapseGeometry = false end
         return true
     end
 
     local close, collapse
     if header and options.closeButton ~= false then
-        close = Styles:CreateButton(header, "X", 25, function() root:Hide() end, preset)
-        close:SetPoint("RIGHT", header, "RIGHT", -8, 0)
+        close = Styles:CreateIconButton(header, "exit_icon", function() root:Hide() end, preset)
+        close:SetPoint("RIGHT", header, "RIGHT", -frameHeaderPadding.right, 0)
         close:SetFrameLevel(root:GetFrameLevel() + 22)
-        close:SetHeight(24)
-        SetWindowButtonGlyph(close, "exit_icon")
         root.closeButton = close
     end
     if header and options.collapseButton ~= false then
-        collapse = Styles:CreateButton(header, "—", 25, function()
+        collapse = Styles:CreateIconButton(header, "minimize_icon", function()
             root:SetCollapsed(not root.collapsed)
         end, preset)
-        collapse:SetPoint("RIGHT", close or header, close and "LEFT" or "RIGHT", close and -5 or -8, 0)
+        collapse:SetPoint("RIGHT", close or header, close and "LEFT" or "RIGHT",
+            close and -frameHeaderControlGap or -frameHeaderPadding.right, 0)
         collapse:SetFrameLevel(root:GetFrameLevel() + 22)
-        collapse:SetHeight(24)
-        SetWindowButtonGlyph(collapse, "minimize_icon")
         root.collapseButton = collapse
     end
     if boundaryHoverMode then
@@ -1755,17 +1933,20 @@ function Host:Create(config)
     if heading then
         local anchor = collapse or close or header
         local anchorPoint = (close or collapse) and "LEFT" or "RIGHT"
-        heading:SetPoint("RIGHT", anchor, anchorPoint, -8, 0)
+        heading:SetPoint("RIGHT", anchor, anchorPoint, -frameHeaderPadding.right, 0)
     end
     local function FitWindowTitle()
         if not heading or not header then return end
         if (tonumber(heading:GetWidth()) or 0) <= 1 then return end
         local titleHeight = math.max(1, math.ceil(heading:GetStringHeight() or 1))
-        local targetHeight = math.max(style.titleHeight, titleHeight + 4)
+        local targetHeight = math.max(style.titleHeight,
+            titleHeight + frameHeaderPadding.top + frameHeaderPadding.bottom)
         if math.abs((header:GetHeight() or 0) - targetHeight) > 0.5 then
             header:SetHeight(targetHeight)
             SetContentTitleSpacing(false)
-            if root.collapsed then root:SetHeight(targetHeight + 2) end
+            if root.collapsed then
+                UpdateCollapsedClampInsets()
+            end
         end
     end
     if header then
@@ -1788,7 +1969,11 @@ function Host:Create(config)
             self._initialCollapsePending = false
             self:SetCollapsed(true)
         end
+        self:RefreshFrameHeaderVisibility()
         Host:BringToFront(self)
+    end)
+    root:HookScript("OnHide", function(self)
+        if header then header:Hide() end
     end)
     root:SetCollapsed(false)
     RefreshGrip()
