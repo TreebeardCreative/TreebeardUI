@@ -194,8 +194,14 @@ local function NormalizeCreateConfig(config)
         frameHeaderControlGap = frameHeader and frameHeader.controlGap,
         closeButton = titleControls.close == true,
         collapseButton = titleControls.minimize == true,
+        movementLockButton = titleControls.lock == true,
         movable = interaction.movable ~= false,
+        onMovableChanged = type(interaction.onMovableChanged) == "function"
+            and interaction.onMovableChanged or nil,
         hoverEnabled = interaction.hover ~= false,
+        -- Border hover is independent: it must not disable title reveal,
+        -- active header canvas, or resize-grip hover feedback.
+        borderHoverEnabled = interaction.borderHover ~= false,
         dragRegion = interaction.dragRegion or DEFAULTS.dragRegion,
         minWidth = minimum.width,
         minHeight = minimum.height,
@@ -254,6 +260,7 @@ function Host:Create(config)
     -- default. Consumers can request the legacy whole-frame hover behavior.
     local boundaryHoverMode = options.hoverRegions ~= false
     local hoverEnabled = options.hoverEnabled ~= false
+    local borderHoverEnabled = options.borderHoverEnabled ~= false
     local frameBorderMode = options.frameBorder
     if frameBorderMode ~= "body" and frameBorderMode ~= "none" then
         frameBorderMode = nil
@@ -642,8 +649,14 @@ function Host:Create(config)
         local textWidth = math.max(0, (heading and heading:GetStringWidth()) or 0)
         local closeWidth = root.closeButton and (root.closeButton:GetWidth() or 25) or 0
         local collapseWidth = root.collapseButton and (root.collapseButton:GetWidth() or 25) or 0
-        local controlsWidth = closeWidth + collapseWidth
-        local controlsGap = closeWidth > 0 and collapseWidth > 0 and 5 or 0
+        local movementLockWidth = root.movementLockButton
+            and (root.movementLockButton:GetWidth() or 25) or 0
+        local controlsWidth = closeWidth + collapseWidth + movementLockWidth
+        local controlCount = 0
+        if closeWidth > 0 then controlCount = controlCount + 1 end
+        if collapseWidth > 0 then controlCount = controlCount + 1 end
+        if movementLockWidth > 0 then controlCount = controlCount + 1 end
+        local controlsGap = math.max(0, controlCount - 1) * frameHeaderControlGap
         local labelGap = controlsWidth > 0 and 8 or 0
         return math.ceil(13 + textWidth + labelGap + controlsWidth + controlsGap + 8)
     end
@@ -1344,7 +1357,7 @@ function Host:Create(config)
         local hoverBorder = ReadSurfaceColor("hoverBorder", Styles:GetWindowHighlightColor(style))
         local interactionBorder = ReadSurfaceColor("interactionBorder", Styles:GetWindowInteractionColor(style))
         local border = current == "drag" and interactionBorder
-            or current == "hover" and hoverBorder or normalBorder
+            or current == "hover" and borderHoverEnabled and hoverBorder or normalBorder
         root:SetBackdropColor(unpack(background))
         ApplyBorderColor(border)
         if root.RefreshFrameHeaderVisibility then root:RefreshFrameHeaderVisibility() end
@@ -1359,6 +1372,14 @@ function Host:Create(config)
         if self.RefreshFrameHeaderVisibility then self:RefreshFrameHeaderVisibility() end
         Repaint()
         if self.RefreshResizeGrip then self:RefreshResizeGrip() end
+    end
+    function root:SetBorderHoverEnabled(enabled)
+        borderHoverEnabled = enabled ~= false
+        Repaint()
+        return borderHoverEnabled
+    end
+    function root:GetBorderHoverEnabled()
+        return borderHoverEnabled
     end
     Styles:RegisterVisual(root, function(window)
         if window.RefreshWindowStyle then window:RefreshWindowStyle() end
@@ -1606,10 +1627,18 @@ function Host:Create(config)
     end
     root:SetDragRegion(root.dragRegion)
     function root:SetMovableEnabled(enabled)
+        local wasEnabled = self.movementEnabled == true
         self.movementEnabled = enabled == true
         self:SetMovable(self.movementEnabled)
         if not self.movementEnabled and dragging then EndDrag() end
+        if self.RefreshMovementLockButton then self:RefreshMovementLockButton() end
+        if wasEnabled ~= self.movementEnabled and type(options.onMovableChanged) == "function" then
+            options.onMovableChanged(self.movementEnabled, self)
+        end
         return true
+    end
+    function root:GetMovableEnabled()
+        return self.movementEnabled == true
     end
 
     -- Four immediate perimeter drag handles, same principle as HUD Groups.
@@ -1902,7 +1931,7 @@ function Host:Create(config)
         return true
     end
 
-    local close, collapse
+    local close, collapse, movementLock
     if header and options.closeButton ~= false then
         close = Styles:CreateIconButton(header, "exit_icon", function() root:Hide() end, preset)
         close:SetPoint("RIGHT", header, "RIGHT", -frameHeaderPadding.right, 0)
@@ -1918,11 +1947,44 @@ function Host:Create(config)
         collapse:SetFrameLevel(root:GetFrameLevel() + 22)
         root.collapseButton = collapse
     end
+    if header and options.movementLockButton then
+        local function GetMovementLockGlyphColor()
+            local color = root.movementEnabled
+                and Styles:GetWindowBorderColor(root)
+                or Styles:GetWindowInteractionColor(root)
+            -- The lock glyph follows the border's RGB tint, not its opacity.
+            -- Border opacity applies to the frame edge and should never hide
+            -- the control that changes movement state.
+            return {color[1], color[2], color[3], 1}
+        end
+        movementLock = Styles:CreateIconButton(header,
+            root.movementEnabled and "unlock_icon" or "lock_icon",
+            function()
+                root:SetMovableEnabled(not root.movementEnabled)
+            end,
+            preset,
+            {
+                getGlyphColor = GetMovementLockGlyphColor,
+            })
+        movementLock:SetPoint("RIGHT", collapse or close or header,
+            (collapse or close) and "LEFT" or "RIGHT",
+            (collapse or close) and -frameHeaderControlGap or -frameHeaderPadding.right, 0)
+        movementLock:SetFrameLevel(root:GetFrameLevel() + 22)
+        root.movementLockButton = movementLock
+        function root:RefreshMovementLockButton()
+            local button = self.movementLockButton
+            if not button or not button.icon then return end
+            button.icon:SetTexture(TBU:GetAssetPath(
+                self.movementEnabled and "unlock_icon.png" or "lock_icon.png"))
+            button.icon:SetVertexColor(unpack(GetMovementLockGlyphColor()))
+        end
+        root:RefreshMovementLockButton()
+    end
     if boundaryHoverMode then
         -- Keep the reveal active while the pointer transfers from the title
         -- surface to its child controls; reconcile after WoW dispatches the
         -- matching leave/enter events for adjacent regions.
-        for _, button in ipairs({close, collapse}) do
+        for _, button in pairs({close, collapse, movementLock}) do
             if button then
                 button:HookScript("OnEnter", function() UpdateHover(true) end)
                 button:HookScript("OnLeave", function() ScheduleBoundaryHoverRefresh() end)
@@ -1931,8 +1993,8 @@ function Host:Create(config)
     end
 
     if heading then
-        local anchor = collapse or close or header
-        local anchorPoint = (close or collapse) and "LEFT" or "RIGHT"
+        local anchor = movementLock or collapse or close or header
+        local anchorPoint = (movementLock or close or collapse) and "LEFT" or "RIGHT"
         heading:SetPoint("RIGHT", anchor, anchorPoint, -frameHeaderPadding.right, 0)
     end
     local function FitWindowTitle()

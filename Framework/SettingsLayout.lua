@@ -309,8 +309,7 @@ function L:Section(parent, id, opts)
 
     -- Section is structural. Border/background are presentation choices only.
     if opts.border ~= false then
-        -- Controlled Retail comparison: hudcraft v1.0.18's single native
-        -- WHITE8X8 backdrop border. Section content/layout are unchanged.
+        -- Native WHITE8X8 backdrop border. Section content/layout are unchanged.
         section:SetBackdrop({
             bgFile = "Interface\\Buttons\\WHITE8X8",
             edgeFile = "Interface\\Buttons\\WHITE8X8",
@@ -348,6 +347,51 @@ function L:Section(parent, id, opts)
         parent:_tbuPageSectionCreated(section)
     end
     return section
+end
+
+-- Create a normal layout Section with a TreebeardUI BorderStyles treatment.
+-- Section spacing remains governed by shared metrics. A small border-safe
+-- inset keeps content clear of decorative corners, matching the rounded
+-- samples in TreebeardSandbox without the old edge-size-sized spacing.
+function L:BorderedSection(parent, id, opts)
+    opts = opts or {}
+    local treatment = opts.treatment or "square"
+    local edgeSize = tonumber(opts.edgeSize)
+    if edgeSize == nil then
+        edgeSize = treatment == "rounded" and 16
+            or treatment == "toast" and 12
+            or treatment == "nineSlice" and 16 or 1
+    end
+    edgeSize = math.max(1, edgeSize)
+    local contentInsets = opts.contentInsets
+    if contentInsets == nil then
+        contentInsets = {left=5, right=5, top=5, bottom=10}
+    end
+
+    local section = self:Section(parent, id, {
+        border = false,
+        padding = opts.padding,
+        gap = opts.gap,
+        borderGeometry = {
+            edgeSize = edgeSize,
+            contentInsets = contentInsets,
+        },
+    })
+    local border = TBU.BorderStyles:Create(section, {
+        treatment = treatment,
+        edgeSize = edgeSize,
+        borderColor = opts.borderColor,
+        opacity = opts.borderOpacity,
+        contentInsets = contentInsets,
+        canvasColor = opts.canvasColor,
+        canvasOpacity = opts.canvasOpacity,
+    })
+    -- BorderStyles returns an independently sized surface. A section-level
+    -- treatment follows the Section bounds while content continues through
+    -- the ordinary SettingsLayout flow.
+    border:SetAllPoints(section)
+    section.customBorder = border
+    return section, border
 end
 
 function L:MainHeader(section, text, opts)
@@ -551,6 +595,11 @@ function L:ReflowSection(section)
                 self:ReflowSection(child)
             elseif child.layoutKind == "row" then
                 self:LayoutRow(child, math.max(1, section:GetWidth() - contentLeft - contentRight))
+            elseif child.layoutKind == "container" or child.layoutKind == "column" then
+                self:ReflowFrame(child, {
+                    width=math.max(1, section:GetWidth() - contentLeft - contentRight),
+                    autoSize=true,
+                })
             end
             local topPadding = math.max(0, tonumber(child.layoutTopPadding) or 0)
             local gap = previous and (child.layoutGapBefore or sectionGap) or 0
@@ -560,10 +609,16 @@ function L:ReflowSection(section)
             local anchors
             if previous then
                 gap = gap + topPadding
+                -- Bottom padding is measured as part of the preceding child's
+                -- flow height. Include it in the next child's anchor offset as
+                -- well, so helpers such as AreaHeader create visible spacing,
+                -- not only extra section height.
+                local anchorGap = gap + math.max(0,
+                    tonumber(previous.layoutBottomPadding) or 0)
                 local xInset = (previous.layoutRole == "main-header")
                     and (contentLeft - headerInsets.left) or 0
                 anchors = {
-                    {"TOPLEFT", previous, "BOTTOMLEFT", xInset, -gap},
+                    {"TOPLEFT", previous, "BOTTOMLEFT", xInset, -anchorGap},
                     {"RIGHT", section, "RIGHT", -contentRight, 0},
                 }
                 total = total + gap
@@ -964,6 +1019,8 @@ function L:LayoutRow(row, width)
             elseif child.layoutKind == "section" then
                 SetWidthIfChanged(child, childWidth)
                 self:ReflowSection(child)
+            elseif child.layoutKind == "container" or child.layoutKind == "column" then
+                self:ReflowFrame(child, {width=childWidth, autoSize=true})
             end
             local childHeight = self:MeasureContent(child)
             tallest = math.max(tallest, childHeight)

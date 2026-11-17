@@ -102,6 +102,7 @@ Styles.GeometryDefaults = {
     pageDescriptionTop = 32,
     navigationWidth = 155,
     navigationGap = 10,
+    navigationEdgeInset = 5,
     navigationItemInset = 8,
     navigationItemGap = 6,
     navigationItemHeight = 28,
@@ -759,7 +760,14 @@ function Styles:CreateIconButton(parent, assetName, onClick, presetName, options
     glyph:SetPoint("CENTER", visual, "CENTER", 0, 0)
     button.icon = glyph
     local function RepaintGlyph()
-        glyph:SetVertexColor(unpack(Styles:GetControlIndicatorColor(button)))
+        local glyphColor
+        if type(options.getGlyphColor) == "function" then
+            glyphColor = options.getGlyphColor(button)
+        end
+        if type(glyphColor) ~= "table" then
+            glyphColor = Styles:GetControlIndicatorColor(button)
+        end
+        glyph:SetVertexColor(unpack(glyphColor))
     end
     self:RegisterVisual(glyph, RepaintGlyph)
     button:HookScript("OnEnter", RepaintGlyph)

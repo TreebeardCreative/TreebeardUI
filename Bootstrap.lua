@@ -1,4 +1,4 @@
--- TreebeardUI v0.2.14: reusable library, no SavedVariables or slash commands.
+-- TreebeardUI v0.2.41: reusable library, no SavedVariables or slash commands.
 local addonName, private = ...
 local registryNames = { "TBUIRegistry", "TreebeardUIRegistry", "TumbleManeUIRegistry" }
 local registry
@@ -20,7 +20,7 @@ if type(registry) ~= "table" or registry.PROTOCOL ~= 1 then
     registry = { PROTOCOL = 1, runtimes = {} }
 end
 for _, name in ipairs(registryNames) do _G[name] = registry end
-local VERSION, API = "0.2.14", 1
+local VERSION, API = "0.2.41", 1
 local runtimeKey = tostring(API) .. ":" .. VERSION
 local previous = registry.runtimes[runtimeKey]
 local standalone = addonName == "TreebeardUI" or addonName == "TumbleManeUI"
@@ -61,7 +61,7 @@ function registry:Acquire(owner, requiredAPI, requiredVersion)
     end
     return nil
 end
-TBU.Constants = { Layout = { SETTINGS_GAP=12, SETTINGS_PADDING=14, DROPDOWN_CLOSE_DELAY=7 } }
+TBU.Constants = { Layout = { SETTINGS_GAP=12, SETTINGS_PADDING=14, DROPDOWN_CLOSE_DELAY=1 } }
 -- The standalone library lives at its addon root. Embedded copies default to
 -- Libs\\TreebeardUI and may supply __TreebeardUIAssetSubdir before bootstrap.
 local subdir = standalone and "" or (private.__TBUIAssetSubdir or private.__TreebeardUIAssetSubdir or "Libs\\TreebeardUI\\")
@@ -69,13 +69,11 @@ assert(type(subdir) == "string", "TreebeardUI embedded asset subdir must be a st
 if subdir ~= "" and subdir:sub(-1) ~= "\\" then subdir = subdir .. "\\" end
 TBU.AssetRoot = "Interface\\AddOns\\" .. addonName .. "\\" .. subdir .. "Textures\\"
 function TBU:GetAssetPath(file) return self.AssetRoot .. tostring(file) end
--- Shared frame constructor used by the framework. Retail and WoW Forever
--- currently use the same BackdropTemplate path, so keep this common rather
--- than maintaining duplicate client adapters.
+-- Shared frame constructor used by the WoW Forever framework.
 function TBU:CreateBackdropFrame(kind, parent)
     return CreateFrame(kind, nil, parent, "BackdropTemplate")
 end
--- Theme lookup remains library-owned and has no consumer or Retail dependencies.
+-- Theme lookup remains library-owned and has no consumer-specific dependencies.
 function TBU:GetThemeColor(key)
     local styles = self.WindowStyles
     local style = styles and styles:Get()

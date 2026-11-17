@@ -116,8 +116,10 @@ end
 -- shared layout registry once instead of traversing arbitrary WoW child frames.
 local function GatherDropdowns(node, found)
     if not node then return end
-    if node.layoutRole == "dropdown" and node.Control
-        and node.Control.GetExpandedMenuHeight then
+    -- Consumers may assign a structural role such as "control" when adopting
+    -- dropdown Content into their layout. Detect popup-capable controls from
+    -- their behavior instead of the mutable layoutRole metadata.
+    if node.Control and type(node.Control.GetExpandedMenuHeight) == "function" then
         found[#found + 1] = node.Control
     end
     for _, child in ipairs(node.layoutChildren or {}) do
@@ -126,21 +128,32 @@ local function GatherDropdowns(node, found)
 end
 
 local function PopupAwareContentHeight(host, dropdowns, naturalHeight, bottomPad)
-    local height = naturalHeight + bottomPad
+    local height = naturalHeight
+    local viewportHeight = tonumber(host.scroll:GetHeight()) or 0
+    if viewportHeight <= 1 then return math.max(1, height) end
     local canvasTop = host.content:GetTop()
     if not canvasTop then return height end
     for _, dropdown in ipairs(dropdowns) do
-        if dropdown:IsShown() then
+        local visible
+        if dropdown.IsVisible then
+            visible = dropdown:IsVisible()
+        else
+            visible = dropdown:IsShown()
+        end
+        if visible then
             local bottom = dropdown:GetBottom()
             if bottom then
                 local menuHeight = math.max(0, tonumber(dropdown:GetExpandedMenuHeight()) or 0)
                 local menuOffset = dropdown.GetPopupDownwardOffset
                     and dropdown:GetPopupDownwardOffset() or 0
-                -- Compare each absolute expanded bottom against the natural
-                -- content bottom. Only the furthest edge reserves scroll room:
-                -- never add popup heights to one another.
+                -- A popup that fits inside the viewport needs no reserved scroll
+                -- area, even when it extends past the page's natural content.
+                -- If it reaches beyond both the viewport and natural content,
+                -- extend only far enough to scroll the popup fully into view.
                 local expandedBottom = canvasTop - bottom + menuOffset + menuHeight
-                height = math.max(height, expandedBottom + bottomPad)
+                if expandedBottom > viewportHeight and expandedBottom > naturalHeight then
+                    height = math.max(height, expandedBottom + math.max(0, bottomPad or 0))
+                end
             end
         end
     end
@@ -191,9 +204,8 @@ function PageHost:BindSections(host, definitions, opts)
         end
     end
     host.sections, host.rows = sections, rows
-    -- Use the Retail client's native layout rounding for each complete page
-    -- Section, including its control frames and border/background textures.
-    -- Guard the newer API so other client profiles retain their prior behavior.
+    -- Use the client's native layout rounding for each complete page Section,
+    -- including its control frames and border/background textures.
     local dropdowns = {}
     local function QueueMeasure()
         if host.ScheduleMeasure then host.ScheduleMeasure() end
@@ -209,6 +221,14 @@ function PageHost:BindSections(host, definitions, opts)
     end
     for _, section in ipairs(sections) do TrackSection(section) end
     local function Measure()
+        -- Sections may gain controls after their initial registration (for
+        -- example, a consumer can lazily build a selected subpage). Refresh
+        -- the dropdown registry during measurement so the popup reserve sees
+        -- the current layout tree instead of only its first construction.
+        for index = #dropdowns, 1, -1 do dropdowns[index] = nil end
+        for _, section in ipairs(sections) do
+            GatherDropdowns(section, dropdowns)
+        end
         -- Blizzard canvas width can be unresolved before first OnShow.
         if opts.legacyMain then
             for _, section in ipairs(sections) do TBU.SettingsLayout:ReflowSection(section) end

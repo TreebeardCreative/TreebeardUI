@@ -190,7 +190,6 @@ local DropdownMetrics = {
     MENU_BORDER_SIZE = 1,
     MENU_BACKGROUND = {0.055, 0.055, 0.065, 0.95},
     MENU_BORDER = {0.76, 0.56, 0.20, 1},
-    MENU_STACK_STEP = 30,
     MENU_HORIZONTAL_INSET = 2,
     MENU_TOP_PADDING = 4,
     MENU_BOTTOM_PADDING = 4,
@@ -374,11 +373,15 @@ local DropdownMenuManager = {
 local function UpdateDropdownMenuManager()
     local manager = DropdownMenuManager
     if manager.pendingCloseButton and manager.pendingCloseAt and GetTime() >= manager.pendingCloseAt then
-        local oldButton = manager.pendingCloseButton
+        local closingButton = manager.pendingCloseButton
         manager.pendingCloseButton = nil
         manager.pendingCloseAt = nil
-        if oldButton ~= manager.activeButton and oldButton.CloseMenu then
-            oldButton:CloseMenu()
+        local overTrigger = closingButton.IsMouseOver and closingButton:IsMouseOver()
+        local menu = closingButton.TBUPopupMenu
+        local overMenu = menu and menu:IsShown() and menu:IsMouseOver()
+        if not overTrigger and not overMenu and closingButton == manager.activeButton
+            and closingButton.CloseMenu then
+            closingButton:CloseMenu()
         end
         if not manager.pendingCloseButton then dropdownMenuTicker:Hide() end
     end
@@ -393,40 +396,23 @@ end)
 
 local function RegisterDropdownOpened(button)
     local manager = DropdownMenuManager
-
-    -- Reopening a menu that was waiting to close cancels its pending close.
-    if manager.pendingCloseButton == button then
-        manager.pendingCloseButton = nil
-        manager.pendingCloseAt = nil
+    local previous = manager.activeButton
+    if previous and previous ~= button and previous.CloseMenu then
+        previous:CloseMenu()
     end
-
-    if manager.activeButton and manager.activeButton ~= button then
-        -- Only one previous menu is kept alive. If a third dropdown is opened,
-        -- close the older pending menu immediately and give the just-replaced
-        -- active menu the new configured grace period.
-        if manager.pendingCloseButton and manager.pendingCloseButton ~= manager.activeButton then
-            if manager.pendingCloseButton.CloseMenu then
-                manager.pendingCloseButton:CloseMenu()
-            end
-        end
-        manager.pendingCloseButton = manager.activeButton
-        manager.pendingCloseAt = GetTime() + manager.delay
-        dropdownMenuTicker:Show()
+    if manager.pendingCloseButton and manager.pendingCloseButton ~= button
+        and manager.pendingCloseButton ~= previous
+        and manager.pendingCloseButton.CloseMenu then
+        manager.pendingCloseButton:CloseMenu()
     end
+    manager.pendingCloseButton = nil
+    manager.pendingCloseAt = nil
+    dropdownMenuTicker:Hide()
 
-    -- The most recently opened popup must render above any older menu still
-    -- visible during the delayed-close grace period. Keep this in the shared
-    -- manager so Single and Multi dropdowns use identical stacking behavior.
+    -- Single and multi dropdowns share one popup, so no stacking is needed.
     local menu = button.TBUPopupMenu
     if menu then
-        local level = button:GetFrameLevel() + 20
-        local previous = manager.pendingCloseButton
-        local previousMenu = previous and previous.TBUPopupMenu
-        if previous ~= button and previousMenu and previousMenu:IsShown()
-            and previousMenu:GetFrameStrata() == menu:GetFrameStrata() then
-            level = math.max(level, previousMenu:GetFrameLevel() + DropdownMetrics.MENU_STACK_STEP)
-        end
-        menu:SetFrameLevel(level)
+        menu:SetFrameLevel(button:GetFrameLevel() + 20)
     end
     manager.activeButton = button
 end
@@ -451,8 +437,25 @@ end
 local function ExtendDropdownLifetime(button)
     local manager = DropdownMenuManager
     if manager.pendingCloseButton == button then
-        manager.pendingCloseAt = GetTime() + manager.delay
+        manager.pendingCloseButton = nil
+        manager.pendingCloseAt = nil
+        dropdownMenuTicker:Hide()
     end
+end
+
+local function ScheduleDropdownClose(button)
+    local manager = DropdownMenuManager
+    if manager.activeButton ~= button then return end
+    manager.pendingCloseButton = button
+    manager.pendingCloseAt = GetTime() + manager.delay
+    dropdownMenuTicker:Show()
+end
+
+local function AttachDropdownCloseOnLeave(button, menu)
+    button:HookScript("OnEnter", function() ExtendDropdownLifetime(button) end)
+    button:HookScript("OnLeave", function() ScheduleDropdownClose(button) end)
+    menu:HookScript("OnEnter", function() ExtendDropdownLifetime(button) end)
+    menu:HookScript("OnLeave", function() ScheduleDropdownClose(button) end)
 end
 
 -- Called by page/group navigation when existing content remains shown but
@@ -734,6 +737,7 @@ local function AddMultiDropdown(parent, label, x, y, options, width, emptyText)
     RepaintPopup(menu)
     menu:Hide()
     button.TBUPopupMenu = menu
+    AttachDropdownCloseOnLeave(button, menu)
     menu:HookScript("OnShow", function() if button.RepaintDropdown then button.RepaintDropdown() end end)
     menu:HookScript("OnHide", function() if button.RepaintDropdown then button.RepaintDropdown() end end)
 
@@ -1252,6 +1256,7 @@ local function AddSingleDropdown(parent, label, x, y, options, getter, setter, w
     RepaintPopup(menu)
     menu:Hide()
     button.TBUPopupMenu = menu
+    AttachDropdownCloseOnLeave(button, menu)
     menu:HookScript("OnShow", function() if button.RepaintDropdown then button.RepaintDropdown() end end)
     menu:HookScript("OnHide", function() if button.RepaintDropdown then button.RepaintDropdown() end end)
     menu.dynamicChildren = {}
@@ -2245,23 +2250,44 @@ local function AddTextInputContent(parent, label, getter, setter, behavior)
     edit:SetPoint("RIGHT", content, "RIGHT", 0, 0)
     edit:SetHeight(metrics.COLOR_EDIT_HEIGHT)
     edit:SetAutoFocus(false)
+    edit:EnableMouse(true)
+    edit:EnableKeyboard(true)
+    edit:HookScript("OnMouseDown", function(target, button)
+        if button == "LeftButton" then target:SetFocus() end
+    end)
     edit:SetFontObject("GameFontHighlight")
     edit:SetMaxLetters(behavior.maxLetters or 128)
     edit:SetJustifyH("LEFT")
     ApplyContentText(edit)
     local showIcon = behavior.showInputIcon ~= false and behavior.isColorInput ~= true
     ApplyRecessedInput(edit, behavior.rightInset or (showIcon and 25 or 7))
-    local repaintValueText = ApplyRoleColor(edit, "value", true)
+    -- Editable values use the primary text role even before focus. The value
+    -- role remains useful for the other, read-only settings controls.
+    local repaintValueText = ApplyRoleColor(edit, "primary", true)
+    edit:HookScript("OnTextChanged", function(target)
+        repaintValueText(target)
+    end)
     if showIcon then content.inputIcon = AddTextInputGlyph(edit) end
     content:SetHeight(captionHeight + metrics.COLOR_CONTROL_GAP + metrics.COLOR_EDIT_HEIGHT)
-    local function refresh()
-        if edit:HasFocus() then return end
-        edit:SetText(tostring(getter() or ""))
+    local function refresh(force)
+        force = force == true
+        if not force and edit:HasFocus() then return end
+        local value = tostring(getter() or "")
+        edit:SetText(value)
+        -- SetText leaves the insertion point at the end, which can horizontally
+        -- scroll an unfocused EditBox past short values. Start idle views at the
+        -- beginning; never disturb the caret or scroll position during editing.
+        if not edit:HasFocus() then edit:SetCursorPosition(0) end
         repaintValueText(edit)
-        if behavior.onRefresh then behavior.onRefresh(content, getter()) end
+        if behavior.onRefresh then behavior.onRefresh(content, value) end
     end
     content.Refresh = refresh
-    RegisterStatefulControl(content, refresh)
+    -- RegisterRefreshControl invokes callbacks with the control as an argument;
+    -- keep that object from being mistaken for the optional force flag.
+    RegisterStatefulControl(content, function() refresh() end)
+    -- Settings pages are often constructed while hidden. Re-read consumer data
+    -- when this input becomes visible so its initial displayed value is current.
+    content:HookScript("OnShow", function() refresh() end)
     local finishing = false
     local function finish(commit)
         if finishing then return end
@@ -2280,7 +2306,9 @@ local function AddTextInputContent(parent, label, getter, setter, behavior)
     edit:SetScript("OnEditFocusLost", function() if not finishing then finish(behavior.commitOnFocusLost == true) end end)
     content.editBox = edit
     content.label = caption
-    refresh()
+    -- Always populate at creation. Focus guards are only for later refreshes,
+    -- when preserving a user's in-progress draft matters.
+    refresh(true)
     return content
 end
 
@@ -2315,8 +2343,8 @@ local function AddHexColorContent(parent, label, getter, setter, onChanged)
     repaintSwatch()
     swatch:EnableMouse(false)
     local baseRefresh = content.Refresh
-    local function refreshSwatch()
-        local hex = tostring(getter() or ""):gsub("^#", "")
+    local function refreshSwatch(value)
+        local hex = tostring(value or ""):gsub("^#", "")
         if #hex == 6 and hex:match("^%x+$") then
             local r = tonumber(hex:sub(1, 2), 16) / 255
             local g = tonumber(hex:sub(3, 4), 16) / 255
@@ -2326,12 +2354,17 @@ local function AddHexColorContent(parent, label, getter, setter, onChanged)
             preview:SetVertexColor(1, 1, 1, 1)
         end
     end
+    -- The saved color is committed only on Enter, but its preview tracks the
+    -- live draft so the visible hex and swatch stay in step while typing.
+    content.editBox:HookScript("OnTextChanged", function(edit)
+        refreshSwatch(edit:GetText())
+    end)
     -- Register another shared refresh callback under the same key by replacing
     -- the initial one. The swatch derives its fill from the authoritative hex
     -- value, so consumers do not need to return a second RGB representation.
     local function refresh()
         baseRefresh()
-        refreshSwatch()
+        refreshSwatch(content.editBox:GetText())
         repaintSwatch()
     end
     content.Refresh = refresh
