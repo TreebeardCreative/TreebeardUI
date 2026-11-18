@@ -1,4 +1,4 @@
--- TreebeardUI v0.2.53: reusable library, no SavedVariables or slash commands.
+-- TreebeardUI v1.0: reusable library, no SavedVariables or slash commands.
 local addonName, private = ...
 local registryNames = { "TBUIRegistry", "TreebeardUIRegistry", "TumbleManeUIRegistry" }
 local registry
@@ -20,7 +20,7 @@ if type(registry) ~= "table" or registry.PROTOCOL ~= 1 then
     registry = { PROTOCOL = 1, runtimes = {} }
 end
 for _, name in ipairs(registryNames) do _G[name] = registry end
-local VERSION, API = "0.2.53", 1
+local VERSION, API = "1.0", 1
 local runtimeKey = tostring(API) .. ":" .. VERSION
 local previous = registry.runtimes[runtimeKey]
 local standalone = addonName == "TreebeardUI" or addonName == "TumbleManeUI"
@@ -103,8 +103,7 @@ function TBU:Log(owner, message)
     end
 end
 -- Exact build compatibility is deliberately checked by each consuming addon.
--- The public API contract number changes only on incompatible API changes;
- -- the build version detects even same-contract library/consumer mismatches.
+-- API_VERSION stays at 1; VERSION identifies the framework implementation build.
 local warnedConsumers = {}
 function TBU:CheckCompatibility(owner, requiredAPI, requiredVersion)
     if type(owner) ~= "string" or owner == "" then return false end

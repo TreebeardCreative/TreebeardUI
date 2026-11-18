@@ -3,7 +3,7 @@
 ## Notes: Shared window, controls and adaptive layout framework.
 ## Author: TreebeardCreative
 ## Group: HUDCraft
-## Version: 0.2.53
+## Version: 1.0
 ## IconTexture: Interface\AddOns\TreebeardUI\Textures\addon_icon.tga
 
 Bootstrap.lua
