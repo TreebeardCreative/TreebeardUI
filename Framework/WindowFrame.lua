@@ -671,7 +671,7 @@ function Host:Create(config)
             horizontalAnchor = "left"
         end
         if verticalAnchor ~= "top" and verticalAnchor ~= "center" and verticalAnchor ~= "bottom" then
-            verticalAnchor = position == "left" and "top" or "bottom"
+            verticalAnchor = (position == "left" or position == "right") and "top" or "bottom"
         end
 
         if position == "top" then
@@ -692,8 +692,8 @@ function Host:Create(config)
             elseif verticalAnchor == "center" then header:SetPoint("RIGHT", root, "LEFT", 0, 0)
             else header:SetPoint("TOPRIGHT", root, "TOPLEFT", 0, 0) end
         else -- right
-            -- The left edge meets the frame's right edge. A bottom anchor
-            -- puts the horizontal tab at the lower end of that side.
+            -- The left edge meets the frame's right edge. Default the tab to
+            -- the top of the side unless the consumer chooses another anchor.
             if verticalAnchor == "top" then header:SetPoint("TOPLEFT", root, "TOPRIGHT", 0, 0)
             elseif verticalAnchor == "center" then header:SetPoint("LEFT", root, "RIGHT", 0, 0)
             else header:SetPoint("BOTTOMLEFT", root, "BOTTOMRIGHT", 0, 0) end

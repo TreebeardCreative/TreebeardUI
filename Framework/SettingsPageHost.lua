@@ -21,7 +21,7 @@ local function EnableNativePixelRounding(frame)
     return false
 end
 
-local function CreateScroll(parent, topOffset, bottomInset, withScrollbar, themeMode, leftInset)
+local function CreateScroll(parent, topOffset, bottomInset, withScrollbar, themeMode, leftInset, scrollbarOptions)
     local scroll = CreateFrame("ScrollFrame", nil, parent)
     local rightInset = withScrollbar and TBU.SettingsControls.ScrollbarGutterWidth or 0
     scroll._tbuRightGutter = rightInset
@@ -36,7 +36,7 @@ local function CreateScroll(parent, topOffset, bottomInset, withScrollbar, theme
     scroll:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -rightInset, bottomInset)
     local scrollbar
     if withScrollbar then
-        scrollbar = TBU.SettingsControls:AttachScrollbar(parent, scroll, themeMode or "gold")
+        scrollbar = TBU.SettingsControls:AttachScrollbar(parent, scroll, themeMode or "gold", scrollbarOptions)
     end
     local content = CreateFrame("Frame", nil, scroll)
     content:SetSize(1, 1)
@@ -335,7 +335,10 @@ end
 function PageHost:CreateEmbedded(parent, pageId)
     -- The scroll viewport itself is flush with its shared header/footer.
     -- Section placement padding is measured separately in BindSections.
-    local scroll, content, scrollbar = CreateScroll(parent, 0, 0, true, nil, 0)
+    -- Keep the standard scrollbar above the corner resize grip while leaving
+    -- the page viewport full-height for content and scroll measurement.
+    local scroll, content, scrollbar = CreateScroll(parent, 0, 0, true, nil, 0,
+        { bottomInset = 18 })
     local layout = TBU.SettingsLayout:Container(content, pageId, {padding=0})
     local host = {panel=parent, scroll=scroll, content=content,
         scrollbar=scrollbar, layout=layout, pageId=pageId, rows={}, sections={}}

@@ -20,6 +20,19 @@ local function GetLabelWidth(button)
     return math.max(0, math.ceil(tonumber(label:GetStringWidth()) or 0))
 end
 
+local function SplitUTF8(text)
+    local characters = {}
+    local index = 1
+    while index <= #text do
+        local first = text:byte(index)
+        local length = first and first >= 240 and 4 or first and first >= 224 and 3
+            or first and first >= 192 and 2 or 1
+        characters[#characters + 1] = text:sub(index, index + length - 1)
+        index = index + length
+    end
+    return characters
+end
+
 local function RefreshSubpageIndicator(button)
     local line = button and button._tbuNavigationLine
     if not line or button._tbuIndicatorWidthMode ~= "content" then return end
@@ -250,7 +263,8 @@ local function CreateNavigationButton(parent, label, options, kind)
         RefreshNavigationButton(self)
     end
     function button:SetLabel(value)
-        self.label:SetText(tostring(value or ""))
+        self._tbuFullLabelText = tostring(value or "")
+        self.label:SetText(self._tbuFullLabelText)
         RefreshNavigationButton(self)
         if type(self._tbuOnLabelChanged) == "function" then
             self._tbuOnLabelChanged(self)
@@ -347,9 +361,43 @@ function NavigationControls:CreateVerticalSubpageNavigation(parent, items, optio
     navigation.storageOwner = options.storageOwner or parent.storageOwner
     navigation.buttons = {}
     navigation.selectedIndex = nil
+    navigation.maxWidth = tonumber(options.maxWidth)
     navigation:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
     navigation:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", 0, 0)
     navigation:SetWidth(minimumWidth)
+
+    local measureLabel = navigation:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    measureLabel:SetAlpha(0)
+    measureLabel:SetWordWrap(false)
+    measureLabel:SetWidth(100000)
+    navigation.measureLabel = measureLabel
+
+    local function MeasureText(button, text)
+        local fontObject = button.label:GetFontObject()
+        if fontObject then measureLabel:SetFontObject(fontObject) end
+        measureLabel:SetText(text or "")
+        return math.max(0, tonumber(measureLabel:GetStringWidth()) or 0)
+    end
+
+    local function SetDisplayedLabel(button, fullText, maxTextWidth)
+        if MeasureText(button, fullText) <= maxTextWidth then
+            button.label:SetText(fullText)
+            return
+        end
+        local characters = SplitUTF8(fullText)
+        local low, high, best = 0, #characters, "…"
+        while low <= high do
+            local middle = math.floor((low + high) / 2)
+            local candidate = table.concat(characters, "", 1, middle) .. "…"
+            if MeasureText(button, candidate) <= maxTextWidth then
+                best = candidate
+                low = middle + 1
+            else
+                high = middle - 1
+            end
+        end
+        button.label:SetText(best)
+    end
 
     local separator = navigation:CreateTexture(nil, "BORDER")
     separator:SetTexture(WHITE)
@@ -370,16 +418,31 @@ function NavigationControls:CreateVerticalSubpageNavigation(parent, items, optio
         resizing = true
         local widestContent = 0
         for _, button in ipairs(navigation.buttons) do
-            widestContent = math.max(widestContent, button:GetContentWidth())
+            widestContent = math.max(widestContent, MeasureText(button, button._tbuFullLabelText or "")
+                + (button._tbuLabelHorizontalInset or 0) * 2)
         end
         local width = math.max(minimumWidth, math.ceil(widestContent + padding * 2))
+        if navigation.preferredWidth then
+            width = math.max(width, navigation.preferredWidth)
+        end
+        if navigation.maxWidth then width = math.min(width, math.max(minimumWidth, navigation.maxWidth)) end
         if math.abs((navigation:GetWidth() or 0) - width) > 0.001 then
             navigation:SetWidth(width)
+        end
+        local availableTextWidth = math.max(1, width - padding * 2 - 6)
+        for _, button in ipairs(navigation.buttons) do
+            SetDisplayedLabel(button, button._tbuFullLabelText or "", availableTextWidth)
+            RefreshNavigationButton(button)
         end
         resizing = false
     end
 
     function navigation:SetSelected(index)
+        if index == nil then
+            self.selectedIndex = nil
+            for _, button in ipairs(self.buttons) do button:SetSelected(false) end
+            return true
+        end
         index = tonumber(index)
         if not index or not self.buttons[index] then return false end
         self.selectedIndex = index
@@ -401,6 +464,20 @@ function NavigationControls:CreateVerticalSubpageNavigation(parent, items, optio
         local button = self.buttons[index]
         if not button then return false end
         button:SetLabel(label)
+        return true
+    end
+
+    function navigation:SetMaxWidth(width)
+        width = tonumber(width)
+        self.maxWidth = width and math.max(minimumWidth, width) or nil
+        RefreshWidth()
+        return true
+    end
+
+    function navigation:SetDisplayWidth(width)
+        width = tonumber(width)
+        self.preferredWidth = width and math.max(minimumWidth, width) or nil
+        RefreshWidth()
         return true
     end
 
@@ -427,6 +504,7 @@ function NavigationControls:CreateVerticalSubpageNavigation(parent, items, optio
             end,
         })
         button.storageOwner = navigation.storageOwner
+        button._tbuFullLabelText = tostring(label or "")
         button:ClearAllPoints()
         button:SetPoint("TOPLEFT", navigation, "TOPLEFT", padding,
             -padding - (index - 1) * (buttonHeight + gap))

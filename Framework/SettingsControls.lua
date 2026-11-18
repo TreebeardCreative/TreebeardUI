@@ -210,6 +210,16 @@ local DropdownMetrics = {
     SCROLL_THUMB_MAX_HEIGHT = 32,
     SCROLL_THUMB_WIDTH = 9,
     SCROLL_THUMB_SCALE = 0.65,
+    SLIM_SCROLLBAR_WIDTH = 12,
+    SLIM_SCROLLBAR_GUTTER_WIDTH = 12,
+    SLIM_SCROLLBAR_GAP = 2,
+    SLIM_SCROLLBAR_TOP_INSET = 3,
+    SLIM_SCROLLBAR_BOTTOM_INSET = 12,
+    SLIM_SCROLLBAR_WHEEL_TOP_INSET = 2,
+    SLIM_SCROLLBAR_WHEEL_BOTTOM_INSET = 15,
+    SLIM_SCROLLBAR_TRACK_WIDTH = 1,
+    SLIM_SCROLLBAR_THUMB_WIDTH = 17,
+    SLIM_SCROLLBAR_THUMB_HEIGHT = 30,
 }
 
 local function SetDropdownDisplayText(fontString, fullText, availableWidth)
@@ -873,9 +883,11 @@ end
 -- Reusable scrollbar: native ScrollFrame mechanics, framework-owned visuals.
 -- themeMode is a developer-facing choice: "gold" for Settings, "inherit"
 -- for future HUD surfaces that should follow the secondary theme color.
-CreateSettingsScrollbar = function(parent, scrollFrame, button, themeMode)
+CreateSettingsScrollbar = function(parent, scrollFrame, button, themeMode, variant)
+    local isSlim = variant == "slim"
+    local barWidth = isSlim and DropdownMetrics.SLIM_SCROLLBAR_WIDTH or DropdownMetrics.SCROLLBAR_WIDTH
     local bar = CreateFrame("Frame", nil, parent)
-    bar:SetWidth(DropdownMetrics.SCROLLBAR_WIDTH)
+    bar:SetWidth(barWidth)
     -- Scroll children contain Sections, Rows, controls and text at nested frame
     -- levels. A +3 offset can leave the scrollbar UNDER the section backdrop.
     -- Keep the scrollbar in the same window strata, above ordinary content.
@@ -902,6 +914,13 @@ CreateSettingsScrollbar = function(parent, scrollFrame, button, themeMode)
     local track = CreateFrame("Button", nil, bar)
     track:SetPoint("TOPLEFT", up, "BOTTOMLEFT", 0, -1)
     track:SetPoint("BOTTOMRIGHT", down, "TOPRIGHT", 0, 1)
+    if isSlim then
+        up:Hide()
+        down:Hide()
+        track:ClearAllPoints()
+        track:SetPoint("TOPLEFT", bar, "TOPLEFT")
+        track:SetPoint("BOTTOMRIGHT", bar, "BOTTOMRIGHT")
+    end
     local trackTexture = track:CreateTexture(nil, "BACKGROUND")
     trackTexture:SetTexture("Interface\\Buttons\\WHITE8X8")
     local function repaintTrack(target)
@@ -910,29 +929,40 @@ CreateSettingsScrollbar = function(parent, scrollFrame, button, themeMode)
     TBU.WindowStyles:RegisterVisual(trackTexture, repaintTrack)
     repaintTrack(trackTexture)
     trackTexture:SetPoint("CENTER")
-    trackTexture:SetWidth(3)
-    trackTexture:SetPoint("TOP", 0, 0)
-    trackTexture:SetPoint("BOTTOM", 0, 0)
+    trackTexture:SetWidth(isSlim and DropdownMetrics.SLIM_SCROLLBAR_TRACK_WIDTH or 3)
+    trackTexture:SetPoint("TOP", 0, -9)
+    trackTexture:SetPoint("BOTTOM", 0, 9)
     local thumb = CreateFrame("Button", nil, track)
-    thumb:SetWidth(DropdownMetrics.SCROLL_THUMB_WIDTH) -- initial width until parent measures
-    thumb:SetHeight(DropdownMetrics.SCROLL_THUMB_MIN_HEIGHT)
+    thumb:SetWidth(isSlim and DropdownMetrics.SLIM_SCROLLBAR_THUMB_WIDTH or DropdownMetrics.SCROLL_THUMB_WIDTH)
+    thumb:SetHeight(isSlim and DropdownMetrics.SLIM_SCROLLBAR_THUMB_HEIGHT or DropdownMetrics.SCROLL_THUMB_MIN_HEIGHT)
     -- Extend the interactive target by 2 UI units on every side.
     thumb:SetHitRectInsets(-2, -2, -2, -2)
-    -- Three-slice pill. The WoW-supplied circular artwork is cropped into
-    -- fixed-size top/bottom caps; only the white center stretches vertically.
-    -- Hit expansion is independent of the visible thumb dimensions.
-    local function makeRoundCap(parent, topCap)
-        local cap = parent:CreateTexture(nil, "ARTWORK")
-        cap:SetTexture("Interface\\CHARACTERFRAME\\TempPortraitAlphaMask")
-        cap:SetTexCoord(0, 1, topCap and 0 or 0.5, topCap and 0.5 or 1)
-        return cap
+    -- Slim uses the library's rounded-rectangle thumb artwork at half the
+    -- standard scrollbar lane/minimum thumb dimensions. The regular scrollbar
+    -- keeps its existing three-slice rendering. Hit expansion is independent
+    -- of the visible thumb dimensions.
+    local thumbParts = {}
+    local thumbTop, thumbMiddle, thumbBottom
+    if isSlim then
+        local thumbImage = thumb:CreateTexture(nil, "ARTWORK")
+        thumbImage:SetTexture(TBU:GetAssetPath("scroll_thumb.png"))
+        thumbImage:SetAllPoints(thumb)
+        thumbParts[1] = thumbImage
+    else
+        local function makeRoundCap(parent, topCap)
+            local cap = parent:CreateTexture(nil, "ARTWORK")
+            cap:SetTexture("Interface\\CHARACTERFRAME\\TempPortraitAlphaMask")
+            cap:SetTexCoord(0, 1, topCap and 0 or 0.5, topCap and 0.5 or 1)
+            return cap
+        end
+        thumbTop = makeRoundCap(thumb, true)
+        thumbMiddle = thumb:CreateTexture(nil, "ARTWORK")
+        thumbMiddle:SetTexture("Interface\\Buttons\\WHITE8X8")
+        thumbBottom = makeRoundCap(thumb, false)
+        thumbParts = {thumbTop, thumbMiddle, thumbBottom}
     end
-    local thumbTop = makeRoundCap(thumb, true)
-    local thumbMiddle = thumb:CreateTexture(nil, "ARTWORK")
-    thumbMiddle:SetTexture("Interface\\Buttons\\WHITE8X8")
-    local thumbBottom = makeRoundCap(thumb, false)
-    local thumbParts = {thumbTop, thumbMiddle, thumbBottom}
     local function positionThumbParts()
+        if isSlim then return end
         local width = math.max(1, thumb:GetWidth())
         local capHeight = math.min(width / 2, thumb:GetHeight() / 2)
         thumbTop:ClearAllPoints()
@@ -978,14 +1008,19 @@ CreateSettingsScrollbar = function(parent, scrollFrame, button, themeMode)
         local trackHeight = math.max(1, track:GetHeight())
         -- Fixed rendered pill width, independent of source-image whitespace.
         -- Stay inside narrow scrollbars while remaining wider than the track.
-        thumb:SetWidth(math.max(5, math.min(DropdownMetrics.SCROLL_THUMB_WIDTH,
-            (bar:GetWidth() or DropdownMetrics.SCROLLBAR_WIDTH) - 2)))
+        if isSlim then
+            thumb:SetWidth(DropdownMetrics.SLIM_SCROLLBAR_THUMB_WIDTH)
+        else
+            thumb:SetWidth(math.max(5, math.min(DropdownMetrics.SCROLL_THUMB_WIDTH,
+                (bar:GetWidth() or DropdownMetrics.SCROLLBAR_WIDTH) - 2)))
+        end
         local visible = math.max(1, scrollFrame:GetHeight())
         -- Each scrollbar scales to its own viewport, with a compact thumb
         -- rather than filling most of short dropdown tracks.
-        local thumbHeight = math.max(DropdownMetrics.SCROLL_THUMB_MIN_HEIGHT,
-            math.min(DropdownMetrics.SCROLL_THUMB_MAX_HEIGHT,
-                math.floor(trackHeight * visible / (visible + maximum) * DropdownMetrics.SCROLL_THUMB_SCALE + 0.5)))
+        local thumbHeight = isSlim and DropdownMetrics.SLIM_SCROLLBAR_THUMB_HEIGHT
+            or math.max(DropdownMetrics.SCROLL_THUMB_MIN_HEIGHT,
+                math.min(DropdownMetrics.SCROLL_THUMB_MAX_HEIGHT,
+                    math.floor(trackHeight * visible / (visible + maximum) * DropdownMetrics.SCROLL_THUMB_SCALE + 0.5)))
         thumbHeight = math.min(trackHeight, thumbHeight)
         thumb:SetHeight(thumbHeight)
         positionThumbParts()
@@ -1100,20 +1135,40 @@ SC.ScrollbarRightInset = 4
 SC.ScrollbarContentGap = 6
 SC.ScrollbarGutterWidth = SC.ScrollbarRightInset
     + DropdownMetrics.SCROLLBAR_WIDTH + SC.ScrollbarContentGap
+SC.SlimScrollbarGutterWidth = DropdownMetrics.SLIM_SCROLLBAR_GUTTER_WIDTH
+
+function SC:GetScrollbarGutterWidth(options)
+    local variant = type(options) == "table" and options.variant or options
+    if variant == "slim" then return DropdownMetrics.SLIM_SCROLLBAR_GUTTER_WIDTH end
+    return SC.ScrollbarGutterWidth
+end
 
 -- Public shared scrollbar wrapper for Settings pages and future scrollable content.
 -- Scrolling is native; only the arrows/track/thumb belong to framework.
-function SC:AttachScrollbar(parent, scrollFrame, themeMode)
-    local bar = CreateSettingsScrollbar(parent, scrollFrame, nil, themeMode or "gold")
+function SC:AttachScrollbar(parent, scrollFrame, themeMode, options)
+    options = type(options) == "table" and options or {}
+    local variant = options.variant == "slim" and "slim" or "standard"
+    local bar = CreateSettingsScrollbar(parent, scrollFrame, nil, themeMode or "gold", variant)
     -- The scroll viewport reserves a right-side lane. Place the bar in that
     -- lane, separated from the viewport by ScrollbarContentGap.
-    local gutterWidth = SC.ScrollbarGutterWidth
-    local barOffset = SC.ScrollbarContentGap
-    bar:SetPoint("TOPLEFT", scrollFrame, "TOPRIGHT", barOffset, 0)
-    bar:SetPoint("BOTTOMLEFT", scrollFrame, "BOTTOMRIGHT", barOffset, 0)
+    local gutterWidth = SC:GetScrollbarGutterWidth(variant)
+    local barOffset = variant == "slim"
+        and DropdownMetrics.SLIM_SCROLLBAR_GAP or SC.ScrollbarContentGap
+    local topInset = math.max(0, tonumber(options.topInset)
+        or (variant == "slim" and DropdownMetrics.SLIM_SCROLLBAR_TOP_INSET or 0))
+    local bottomInset = math.max(0, tonumber(options.bottomInset)
+        or (variant == "slim" and DropdownMetrics.SLIM_SCROLLBAR_BOTTOM_INSET or 0))
+    local wheelTopInset = math.max(0, tonumber(options.wheelTopInset)
+        or (variant == "slim" and DropdownMetrics.SLIM_SCROLLBAR_WHEEL_TOP_INSET or 0))
+    local wheelBottomInset = math.max(0, tonumber(options.wheelBottomInset)
+        or (variant == "slim" and DropdownMetrics.SLIM_SCROLLBAR_WHEEL_BOTTOM_INSET or 0))
+    bar:SetPoint("TOPLEFT", scrollFrame, "TOPRIGHT", barOffset, -topInset)
+    bar:SetPoint("BOTTOMLEFT", scrollFrame, "BOTTOMRIGHT", barOffset,
+        bottomInset)
     local wheelGutter = CreateFrame("Frame", nil, parent)
-    wheelGutter:SetPoint("TOPLEFT", scrollFrame, "TOPRIGHT", 0, 0)
-    wheelGutter:SetPoint("BOTTOMRIGHT", scrollFrame, "BOTTOMRIGHT", gutterWidth, 0)
+    wheelGutter:SetPoint("TOPLEFT", scrollFrame, "TOPRIGHT", 0, -wheelTopInset)
+    wheelGutter:SetPoint("BOTTOMRIGHT", scrollFrame, "BOTTOMRIGHT", gutterWidth,
+        wheelBottomInset)
     wheelGutter:SetFrameLevel(scrollFrame:GetFrameLevel() + 1)
     wheelGutter:EnableMouse(true)
     wheelGutter:EnableMouseWheel(true)
@@ -1129,6 +1184,8 @@ function SC:AttachScrollbar(parent, scrollFrame, themeMode)
         if bar:IsShown() then bar:Update() end
     end)
     bar.wheelGutter = wheelGutter
+    bar.variant = variant
+    bar.gutterWidth = gutterWidth
     local function refreshNow()
         bar:RefreshLayer()
         local scrollable = scrollFrame:GetVerticalScrollRange() or 0
