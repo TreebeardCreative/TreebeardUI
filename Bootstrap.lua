@@ -20,7 +20,7 @@ if type(registry) ~= "table" or registry.PROTOCOL ~= 1 then
     registry = { PROTOCOL = 1, runtimes = {} }
 end
 for _, name in ipairs(registryNames) do _G[name] = registry end
-local VERSION, API = "1.0", 1
+local VERSION, API = "1.1.0", 1
 local runtimeKey = tostring(API) .. ":" .. VERSION
 local previous = registry.runtimes[runtimeKey]
 local standalone = addonName == "TreebeardUI" or addonName == "TumbleManeUI"
