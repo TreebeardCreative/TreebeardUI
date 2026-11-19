@@ -1232,6 +1232,225 @@ function SC:AttachScrollbar(parent, scrollFrame, themeMode, options)
     return bar
 end
 
+-- Custom-rendered multiline editor. The EditBox remains responsible for input
+-- and selection geometry; TreebeardUI draws the visible text and blinking caret.
+function SC:CreateCustomMultilineTextInput(parent, options)
+    assert(parent and parent.CreateFontString, "custom multiline editor parent required")
+    options = type(options) == "table" and options or {}
+
+    local insets = type(options.insets) == "table" and options.insets or {}
+    local leftInset = math.max(0, tonumber(insets.left) or 0)
+    local topInset = math.max(0, tonumber(insets.top) or 0)
+    local rightInset = math.max(0, tonumber(insets.right) or 0)
+    local bottomInset = math.max(0, tonumber(insets.bottom) or 0)
+    local textInsets = type(options.textInsets) == "table" and options.textInsets or {}
+    local textLeft = math.max(0, tonumber(textInsets.left) or 8)
+    local textRight = math.max(0, tonumber(textInsets.right) or 8)
+    local textTop = math.max(0, tonumber(textInsets.top) or 8)
+    local textBottom = math.max(0, tonumber(textInsets.bottom) or 8)
+    local scrollbarOptions = type(options.scrollbar) == "table" and options.scrollbar or nil
+    local gutter = scrollbarOptions and self:GetScrollbarGutterWidth(scrollbarOptions) or 0
+    local scrollbarGap = scrollbarOptions and math.max(0, tonumber(options.scrollbarGap) or 2) or 0
+    local fontObject = options.fontObject or "GameFontHighlight"
+
+    local scroll = CreateFrame("ScrollFrame", nil, parent)
+    scroll:SetPoint("TOPLEFT", parent, "TOPLEFT", leftInset, -topInset)
+    scroll:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT",
+        -(rightInset + gutter + scrollbarGap), bottomInset)
+    scroll:EnableMouseWheel(true)
+
+    local content = CreateFrame("Frame", nil, scroll)
+    content:SetSize(1, 1)
+    scroll:SetScrollChild(content)
+
+    local edit = CreateFrame("EditBox", nil, content)
+    edit:SetMultiLine(true)
+    edit:SetAutoFocus(false)
+    edit:EnableMouse(true)
+    edit:EnableMouseWheel(true)
+    edit:EnableKeyboard(true)
+    edit:SetFontObject(fontObject)
+    edit:SetMaxLetters(tonumber(options.maxLetters) or 20000)
+    edit:SetTextInsets(textLeft, textRight, textTop, textBottom)
+    edit:SetJustifyH(options.justifyH or "LEFT")
+    edit:SetJustifyV(options.justifyV or "TOP")
+    edit:SetIndentedWordWrap(false)
+    edit:SetText(tostring(options.text or ""))
+    edit:SetTextColor(1, 1, 1, 0)
+
+    local visibleText = edit:CreateFontString(nil, "ARTWORK", fontObject)
+    visibleText:SetJustifyH(options.justifyH or "LEFT")
+    visibleText:SetJustifyV(options.justifyV or "TOP")
+    visibleText:SetWordWrap(true)
+    if visibleText.SetNonSpaceWrap then visibleText:SetNonSpaceWrap(true) end
+    if visibleText.SetMaxLines then visibleText:SetMaxLines(0) end
+
+    local measure = parent:CreateFontString(nil, "ARTWORK", fontObject)
+    measure:SetAlpha(0)
+    measure:SetJustifyH("LEFT")
+    measure:SetJustifyV("TOP")
+    measure:SetWordWrap(true)
+    if measure.SetNonSpaceWrap then measure:SetNonSpaceWrap(true) end
+    if measure.SetMaxLines then measure:SetMaxLines(0) end
+
+    local surface = {
+        scrollFrame = scroll,
+        editBox = edit,
+        visibleText = visibleText,
+        measureText = measure,
+        content = content,
+    }
+    local caret = edit:CreateTexture(nil, "OVERLAY")
+    local caretWidth = math.max(1, tonumber(options.caretWidth) or 1)
+    local caretBlinkRate = math.max(0.1, tonumber(options.caretBlinkRate) or 0.5)
+    caret:SetSize(caretWidth, 16)
+    caret:Hide()
+    surface.caret = caret
+
+    local caretElapsed, caretVisible = 0, false
+    local function RepaintInteractionColor()
+        if not TBU.WindowStyles then return end
+        local color = TBU.WindowStyles:GetWindowInteractionColor(edit)
+        if not color then return end
+        caret:SetColorTexture(color[1] or 1, color[2] or 0.5,
+            color[3] or 0, color[4] or 1)
+        edit:SetHighlightColor(color[1] or 1, color[2] or 0.5,
+            color[3] or 0, tonumber(options.selectionOpacity) or 0.35)
+    end
+    if TBU.WindowStyles then
+        TBU.WindowStyles:RegisterVisual(caret, RepaintInteractionColor)
+    end
+    RepaintInteractionColor()
+
+    local function EscapeMarkup(value)
+        return (tostring(value or ""):gsub("|", "||"))
+    end
+    local function RenderText()
+        visibleText:SetText(EscapeMarkup(edit:GetText() or ""))
+    end
+    local function SetCaretVisible(visible)
+        caretVisible = visible == true
+        if caretVisible and edit:HasFocus() then caret:Show() else caret:Hide() end
+    end
+    local function UpdateCaret(_, x, y, _cursorWidth, height)
+        height = tonumber(height) or 16
+        caret:ClearAllPoints()
+        caret:SetPoint("TOPLEFT", edit, "TOPLEFT",
+            (tonumber(x) or 0) + textLeft,
+            (tonumber(y) or 0) - textTop)
+        caret:SetSize(caretWidth, math.max(1, height))
+        if edit:HasFocus() then SetCaretVisible(true) end
+    end
+
+    local function RefreshGeometry()
+        local width = math.max(1, scroll:GetWidth() or 1)
+        local text = edit:GetText() or ""
+        local explicitLines = select(2, text:gsub("\n", "")) + 1
+        local _, fontSize = edit:GetFont()
+        measure:SetWidth(math.max(1, width - textLeft - textRight))
+        measure:SetText(text)
+        visibleText:SetWidth(math.max(1, width - textLeft - textRight))
+        visibleText:SetText(EscapeMarkup(text))
+        local measuredHeight = type(measure.GetStringHeight) == "function"
+            and (tonumber(measure:GetStringHeight()) or 0) or 0
+        local viewportHeight = math.max(1, scroll:GetHeight() or 1)
+        local contentHeight = math.max(viewportHeight,
+            measuredHeight + textTop + textBottom,
+            explicitLines * (tonumber(fontSize) or 12) + textTop + textBottom)
+        content:SetSize(width, contentHeight)
+
+        -- Keep short notes filling the viewport so mouse selection still works;
+        -- overflow notes grow the ScrollFrame child from measured wrapped text.
+        edit:ClearAllPoints()
+        edit:SetPoint("TOPLEFT", content, "TOPLEFT")
+        edit:SetWidth(width)
+        edit:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT")
+        visibleText:ClearAllPoints()
+        visibleText:SetPoint("TOPLEFT", edit, "TOPLEFT", textLeft, -textTop)
+        visibleText:SetPoint("RIGHT", edit, "RIGHT", -textRight, 0)
+        visibleText:SetHeight(math.max(1, contentHeight - textTop - textBottom))
+
+        scroll:UpdateScrollChildRect()
+        local range = math.max(0, scroll:GetVerticalScrollRange() or 0)
+        scroll:SetVerticalScroll(math.max(0, math.min(range,
+            scroll:GetVerticalScroll() or 0)))
+        if surface.scrollbar and surface.scrollbar.RefreshVisibility then
+            surface.scrollbar:RefreshVisibility()
+        end
+    end
+    local geometryUpdate = CreateFrame("Frame", nil, parent)
+    geometryUpdate:Hide()
+    geometryUpdate:SetScript("OnUpdate", function(target)
+        target:Hide()
+        RefreshGeometry()
+    end)
+    surface.RefreshGeometry = RefreshGeometry
+    surface.QueueGeometry = function()
+        if not geometryUpdate:IsShown() then geometryUpdate:Show() end
+    end
+    surface.GetText = function() return edit:GetText() or "" end
+    surface.SetText = function(_, text)
+        edit:SetText(tostring(text or ""))
+        surface:QueueGeometry()
+    end
+    surface.SetInputEnabled = function(_, enabled)
+        enabled = enabled == true
+        if not enabled then edit:ClearFocus() end
+        edit:EnableMouse(enabled)
+        edit:EnableKeyboard(enabled)
+    end
+
+    local function ScrollBy(delta)
+        local range = math.max(0, scroll:GetVerticalScrollRange() or 0)
+        local current = scroll:GetVerticalScroll() or 0
+        scroll:SetVerticalScroll(math.max(0, math.min(range,
+            current - delta * (tonumber(options.wheelStep) or 35))))
+        if surface.scrollbar and surface.scrollbar:IsShown() then
+            surface.scrollbar:Update()
+        end
+    end
+    scroll:SetScript("OnMouseWheel", function(_, delta) ScrollBy(delta) end)
+    edit:SetScript("OnMouseWheel", function(_, delta) ScrollBy(delta) end)
+    edit:HookScript("OnMouseDown", function(target, button)
+        if button == "LeftButton" then target:SetFocus() end
+    end)
+    edit:HookScript("OnCursorChanged", UpdateCaret)
+    edit:HookScript("OnTextChanged", function(target, userInput)
+        RenderText()
+        surface:QueueGeometry()
+        if options.onTextChanged then options.onTextChanged(target, userInput) end
+    end)
+    edit:HookScript("OnEditFocusGained", function()
+        caretElapsed = 0
+        SetCaretVisible(true)
+    end)
+    edit:HookScript("OnEditFocusLost", function()
+        SetCaretVisible(false)
+    end)
+    local caretClock = CreateFrame("Frame", nil, parent)
+    caretClock:SetScript("OnUpdate", function(_, elapsed)
+        if not edit:HasFocus() then return end
+        caretElapsed = caretElapsed + elapsed
+        if caretElapsed >= caretBlinkRate then
+            caretElapsed = caretElapsed - caretBlinkRate
+            SetCaretVisible(not caretVisible)
+        end
+    end)
+
+    if options.textColorRole ~= false then
+        ApplyRoleColor(visibleText, options.textColorRole or "primary", false)
+    end
+    if options.onEditBoxCreated then options.onEditBoxCreated(edit, surface) end
+    if options.onVisibleTextCreated then options.onVisibleTextCreated(visibleText, surface) end
+    if scrollbarOptions then
+        surface.scrollbar = self:AttachScrollbar(parent, scroll,
+            options.themeMode, scrollbarOptions)
+    end
+    parent:HookScript("OnShow", surface.QueueGeometry)
+    surface:QueueGeometry()
+    return surface
+end
+
 local function AddSingleDropdown(parent, label, x, y, options, getter, setter, width)
     local controlWidth = width
     local hasLabel = label and label ~= ""

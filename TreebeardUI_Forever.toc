@@ -2,7 +2,6 @@
 ## Title: TreebeardUI
 ## Notes: Shared window, controls and adaptive layout framework.
 ## Author: TreebeardCreative
-## Group: HUDCraft
 ## Version: 1.0
 ## IconTexture: Interface\AddOns\TreebeardUI\Textures\addon_icon.tga
 
