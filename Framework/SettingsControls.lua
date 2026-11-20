@@ -2590,17 +2590,20 @@ end
 
 -- Color input composes generic text editing with a visual swatch. Hex policy
 -- and defaults remain the consumer's responsibility; no theme colors change.
-local function AddHexColorContent(parent, label, getter, setter, onChanged)
-    local content = AddTextInputContent(parent, label,
+local function AddHexColorContent(parent, label, getter, setter, onChanged, opacityOptions)
+    opacityOptions = opacityOptions or {}
+    local content
+    local function CommitColor(value)
+        local accepted = setter(value)
+        if accepted and onChanged then onChanged(content) end
+        return accepted
+    end
+    content = AddTextInputContent(parent, label,
         function() return getter() end,
-        function(value)
-            local accepted = setter(value)
-            if accepted and onChanged then onChanged(content) end
-            return accepted
-        end,
+        CommitColor,
         {maxLetters=32, rightInset=28, isColorInput=true})
     content.layoutRole = "color"
-    local swatch = TBU:CreateBackdropFrame("Frame", content.editBox)
+    local swatch = TBU:CreateBackdropFrame("Button", content.editBox)
     swatch:SetSize(12, 12)
     swatch:SetPoint("RIGHT", content.editBox, "RIGHT", -5, 0)
     swatch:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8X8",edgeFile="Interface\\Buttons\\WHITE8X8",edgeSize=1})
@@ -2617,7 +2620,6 @@ local function AddHexColorContent(parent, label, getter, setter, onChanged)
     end
     TBU.WindowStyles:RegisterVisual(swatch, repaintSwatch)
     repaintSwatch()
-    swatch:EnableMouse(false)
     local baseRefresh = content.Refresh
     local function refreshSwatch(value)
         local hex = tostring(value or ""):gsub("^#", "")
@@ -2634,6 +2636,66 @@ local function AddHexColorContent(parent, label, getter, setter, onChanged)
     -- live draft so the visible hex and swatch stay in step while typing.
     content.editBox:HookScript("OnTextChanged", function(edit)
         refreshSwatch(edit:GetText())
+    end)
+    local function ParseHexColor(value)
+        local hex = tostring(value or ""):gsub("^#", "")
+        if #hex ~= 6 or not hex:match("^%x+$") then return 1, 1, 1 end
+        return tonumber(hex:sub(1, 2), 16) / 255,
+            tonumber(hex:sub(3, 4), 16) / 255,
+            tonumber(hex:sub(5, 6), 16) / 255
+    end
+    local function FormatHexColor(r, g, b)
+        local function Byte(value)
+            return math.max(0, math.min(255, math.floor((tonumber(value) or 0) * 255 + 0.5)))
+        end
+        return string.format("#%02X%02X%02X", Byte(r), Byte(g), Byte(b))
+    end
+    local function ApplyPickerColor(r, g, b)
+        local value = FormatHexColor(r, g, b)
+        if not CommitColor(value) then return end
+        content.editBox:SetText(value)
+        content.editBox:SetCursorPosition(0)
+        TBU:RefreshAll()
+    end
+    local function HasOpacityBinding()
+        return type(opacityOptions.get) == "function"
+            and type(opacityOptions.set) == "function"
+    end
+    local function GetPickerOpacity()
+        local percent = HasOpacityBinding() and tonumber(opacityOptions.get()) or 100
+        return math.max(0, math.min(100, percent or 100)) / 100
+    end
+    local function ApplyPickerOpacity(alpha)
+        if not HasOpacityBinding() then return end
+        alpha = tonumber(alpha)
+        if not alpha then return end
+        alpha = math.max(0, math.min(1, alpha))
+        local accepted = opacityOptions.set(math.floor(alpha * 100 + 0.5))
+        if accepted == false then return end
+        TBU:RefreshAll()
+    end
+    swatch:SetScript("OnClick", function()
+        local picker = _G.ColorPickerFrame
+        if not picker or type(picker.SetupColorPickerAndShow) ~= "function" then return end
+        local r, g, b = ParseHexColor(content.editBox:GetText())
+        picker:SetupColorPickerAndShow({
+            r = r,
+            g = g,
+            b = b,
+            hasOpacity = HasOpacityBinding(),
+            opacity = GetPickerOpacity(),
+            swatchFunc = function()
+                ApplyPickerColor(picker:GetColorRGB())
+            end,
+            opacityFunc = function()
+                ApplyPickerOpacity(picker:GetColorAlpha())
+            end,
+            cancelFunc = function(previousValues)
+                if type(previousValues) ~= "table" then return end
+                ApplyPickerColor(previousValues.r, previousValues.g, previousValues.b)
+                ApplyPickerOpacity(previousValues.a)
+            end,
+        })
     end)
     -- Register another shared refresh callback under the same key by replacing
     -- the initial one. The swatch derives its fill from the authoritative hex

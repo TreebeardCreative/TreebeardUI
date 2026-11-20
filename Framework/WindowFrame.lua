@@ -20,6 +20,13 @@ local function SnapToPixel(value, scale)
     return math.floor((tonumber(value) or 0) * scale + 0.5) / scale
 end
 
+local POSITION_ANCHORS = {
+    TOPLEFT = true,
+    TOPRIGHT = true,
+    BOTTOMLEFT = true,
+    BOTTOMRIGHT = true,
+}
+
 local function SnapWindowRectangle(frame, preserveLogicalSize)
     local left, right = frame:GetLeft(), frame:GetRight()
     local bottom, top = frame:GetBottom(), frame:GetTop()
@@ -41,16 +48,74 @@ local function SnapWindowRectangle(frame, preserveLogicalSize)
     local heightPixels = math.max(1, topPixel - bottomPixel)
 
     frame:ClearAllPoints()
-    -- Keep one stable body anchor regardless of title placement or collapse
-    -- state. Derive its offsets from the snapped rectangle's top-right edge.
-    frame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT",
-        rightPixel / parentScale - (parentRight - parentLeft),
-        topPixel / parentScale - (parentTop - parentBottom))
+    -- Keep the snapped rectangle stable while using the consumer-selected
+    -- growth anchor. Fixed windows retain the historical TOPRIGHT anchor.
+    local anchor = frame.positionAnchorMode == "screenAdaptive"
+        and POSITION_ANCHORS[frame.positionAnchorPoint] and frame.positionAnchorPoint or "TOPRIGHT"
+    local x
+    if anchor:find("LEFT", 1, true) then
+        x = leftPixel / parentScale
+    else
+        x = rightPixel / parentScale - (parentRight - parentLeft)
+    end
+    local y
+    if anchor:find("TOP", 1, true) then
+        y = topPixel / parentScale - (parentTop - parentBottom)
+    else
+        y = bottomPixel / parentScale
+    end
+    frame:SetPoint(anchor, UIParent, anchor, x, y)
     frame:SetSize(widthPixels / frameScale, heightPixels / frameScale)
     if not preserveLogicalSize then
         if frame.expandedWidth ~= nil then frame.expandedWidth = frame:GetWidth() end
         if frame.expandedHeight ~= nil and not frame.collapsed then frame.expandedHeight = frame:GetHeight() end
     end
+    return true
+end
+
+local function GetScreenAdaptiveAnchor(frame)
+    local left, right = frame:GetLeft(), frame:GetRight()
+    local bottom, top = frame:GetBottom(), frame:GetTop()
+    local screenLeft, screenRight = UIParent:GetLeft(), UIParent:GetRight()
+    local screenBottom, screenTop = UIParent:GetBottom(), UIParent:GetTop()
+    if not (left and right and bottom and top and screenLeft and screenRight
+        and screenBottom and screenTop) then
+        return frame.positionAnchorPoint or "TOPRIGHT"
+    end
+
+    local horizontal = (left + right) / 2 < (screenLeft + screenRight) / 2 and "LEFT" or "RIGHT"
+    local vertical = (bottom + top) / 2 < (screenBottom + screenTop) / 2 and "BOTTOM" or "TOP"
+    return vertical .. horizontal
+end
+
+local function ClampFrameBodyToScreen(frame)
+    local left, right = frame:GetLeft(), frame:GetRight()
+    local bottom, top = frame:GetBottom(), frame:GetTop()
+    local screenLeft, screenRight = UIParent:GetLeft(), UIParent:GetRight()
+    local screenBottom, screenTop = UIParent:GetBottom(), UIParent:GetTop()
+    if not (left and right and bottom and top and screenLeft and screenRight
+        and screenBottom and screenTop) then
+        return false
+    end
+
+    local offsetX, offsetY = 0, 0
+    if right - left <= screenRight - screenLeft then
+        if left < screenLeft then offsetX = screenLeft - left end
+        if right + offsetX > screenRight then offsetX = screenRight - right end
+    end
+    if top - bottom <= screenTop - screenBottom then
+        if bottom < screenBottom then offsetY = screenBottom - bottom end
+        if top + offsetY > screenTop then offsetY = screenTop - top end
+    end
+    if math.abs(offsetX) <= 0.01 and math.abs(offsetY) <= 0.01 then return false end
+
+    local point, relativeTo, relativePoint, x, y = frame:GetPoint(1)
+    if not point or not relativeTo or not relativePoint
+        or type(x) ~= "number" or type(y) ~= "number" then
+        return false
+    end
+    frame:ClearAllPoints()
+    frame:SetPoint(point, relativeTo, relativePoint, x + offsetX, y + offsetY)
     return true
 end
 
@@ -232,6 +297,7 @@ local function NormalizeCreateConfig(config)
         height = tonumber(initial.height) or DEFAULTS.minimumHeight,
         defaultX = tonumber(position.x) or 0,
         defaultY = tonumber(position.y) or 0,
+        positionMode = position.mode == "screenAdaptive" and "screenAdaptive" or "fixed",
         minWidth = tonumber(minimum.width) or DEFAULTS.minimumWidth,
         minHeight = tonumber(minimum.height) or DEFAULTS.minimumHeight,
         minimumMode = minimum.mode == "content" and "content" or "fixed",
@@ -294,6 +360,8 @@ function Host:Create(config)
     root._tbuSurfaceOptions = options.surface or {}
     root.windowKey = key
     root.storageOwner = owner
+    root.positionAnchorMode = normalized.positionMode
+    root.positionAnchorPoint = "TOPRIGHT"
     root.defaultWindowWidth = width
     root.defaultWindowHeight = height
     function root:BringToFront() Host:BringToFront(self) end
@@ -530,6 +598,7 @@ function Host:Create(config)
         if not resizing then SnapWindowRectangle(self) end
         self.expandedWidth = self:GetWidth()
         if not self.collapsed then self.expandedHeight = self:GetHeight() end
+        if not resizing and self.RefreshPositionAnchor then self:RefreshPositionAnchor() end
     end
     root:SetFrameStrata("DIALOG")
     root.movementEnabled = options.movable ~= false
@@ -543,11 +612,25 @@ function Host:Create(config)
     local saved = state and state.windowPositions[key]
     if type(saved) == "table" and type(saved.x) == "number" and type(saved.y) == "number"
         and type(saved.point) == "string" and type(saved.relativePoint) == "string" then
+        if root.positionAnchorMode == "screenAdaptive" and POSITION_ANCHORS[saved.point] then
+            root.positionAnchorPoint = saved.point
+        end
         root:SetPoint(saved.point, UIParent, saved.relativePoint, saved.x, saved.y)
     else
         root:SetPoint(normalized.positionPoint, UIParent, normalized.relativePoint, defaultX or 0, defaultY or 0)
     end
     SnapWindowRectangle(root)
+    if root.positionAnchorMode == "screenAdaptive" then
+        ClampFrameBodyToScreen(root)
+        root.positionAnchorPoint = GetScreenAdaptiveAnchor(root)
+        SnapWindowRectangle(root)
+        local point, _, relativePoint, x, y = root:GetPoint(1)
+        if state and point and relativePoint and type(x) == "number" and type(y) == "number" then
+            state.windowPositions[key] = {
+                point = point, relativePoint = relativePoint, x = x, y = y,
+            }
+        end
+    end
 
     local heading
     if frameHeaderMode ~= "never" then
@@ -1426,17 +1509,6 @@ function Host:Create(config)
         if not charState then return end
         local point, _, relativePoint, x, y = root:GetPoint(1)
         if point and relativePoint and type(x) == "number" and type(y) == "number" then
-            -- When a bottom-attached title is collapsed, the root has been
-            -- translated so the body's bottom edge (and thus the title) stays
-            -- fixed. Persist the expanded root anchor so reload + collapse
-            -- reconstructs that same title position from the full-size body.
-            if root.collapsed and root.frameHeaderPosition == "bottom"
-                and point == "TOPRIGHT" then
-                local expandedHeight = tonumber(root.expandedHeight) or root:GetHeight() or 0
-                local currentHeight = tonumber(root:GetHeight()) or expandedHeight
-                y = y + (expandedHeight - currentHeight)
-                    * EffectiveScale(root) / EffectiveScale(UIParent)
-            end
             charState.windowPositions[key] = {
                 point = point, relativePoint = relativePoint, x = x, y = y,
             }
@@ -1444,6 +1516,21 @@ function Host:Create(config)
                 point = point, relativePoint = relativePoint, x = x, y = y,
             }
         end
+    end
+
+    local function RefreshScreenAdaptiveAnchor()
+        if root.positionAnchorMode ~= "screenAdaptive" then return end
+        local nextAnchor = GetScreenAdaptiveAnchor(root)
+        if nextAnchor ~= root.positionAnchorPoint then
+            root.positionAnchorPoint = nextAnchor
+            SnapWindowRectangle(root, true)
+        end
+        SavePosition()
+    end
+    function root:RefreshPositionAnchor()
+        if resizing then return false end
+        RefreshScreenAdaptiveAnchor()
+        return true
     end
 
     local function RefreshGrip()
@@ -1543,7 +1630,8 @@ function Host:Create(config)
         root:SetScript("OnUpdate", nil)
         SnapWindowRectangle(root)
         SaveSize()
-        SavePosition()
+        RefreshScreenAdaptiveAnchor()
+        if root.positionAnchorMode ~= "screenAdaptive" then SavePosition() end
         Repaint()
         RefreshGrip()
     end
@@ -1553,7 +1641,8 @@ function Host:Create(config)
             root:StopMovingOrSizing()
             SnapWindowRectangle(root)
             dragging = false
-            SavePosition()
+            RefreshScreenAdaptiveAnchor()
+            if root.positionAnchorMode ~= "screenAdaptive" then SavePosition() end
         end
         Repaint()
         RefreshGrip()
